@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 const IS_WIN = process.platform === "win32";
+const IDLE_MS = Number(process.env.LLM_IDLE_TIMEOUT_MS || 5 * 60 * 1000);
 
 function findBin() {
   if (process.env.CLAUDE_CODE_BIN) return process.env.CLAUDE_CODE_BIN;
@@ -66,11 +67,15 @@ export class LocalClaudeLLM {
       const env = { ...process.env, CLAUDE_CODE_ENTRYPOINT: "agent-office" };
       for (const k of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]) delete env[k];
       const child = spawn(info.bin, args, { cwd: workDir(), windowsHide: true, env });
-      let buf = "", streamed = "", result = null, stderr = "";
+      let buf = "", streamed = "", result = null, stderr = "", idle = false, idleTimer;
       const onAbort = () => child.kill();
       signal?.addEventListener("abort", onAbort, { once: true });
+      // Kill a run that goes quiet for too long so the job can retry instead of freezing.
+      const bump = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => { idle = true; child.kill(); }, IDLE_MS); };
+      bump();
 
       child.stdout.on("data", (chunk) => {
+        bump();
         buf += chunk;
         let nl;
         while ((nl = buf.indexOf("\n")) >= 0) {
@@ -90,8 +95,10 @@ export class LocalClaudeLLM {
       child.stderr.on("data", (d) => { if (stderr.length < 4000) stderr += d; });
       child.on("error", (err) => reject(err));
       child.on("close", () => {
+        clearTimeout(idleTimer);
         signal?.removeEventListener("abort", onAbort);
         if (signal?.aborted) return reject(new Error("Cancelled"));
+        if (idle) return reject(Object.assign(new Error(`Claude Code ไม่ตอบกลับนานเกิน ${Math.round(IDLE_MS / 60000)} นาที`), { transient: true }));
         if (!result) return reject(new Error(`Claude Code หยุดทำงานก่อนตอบ ${stderr.slice(0, 300)}`));
         if (result.is_error) {
           const msg = String(result.result || result.subtype || "error");
@@ -102,6 +109,7 @@ export class LocalClaudeLLM {
         }
         const u = result.usage || {};
         resolve({
+          truncated: result.stop_reason === "max_tokens",
           text: typeof result.result === "string" && result.result ? result.result : streamed,
           usage: { input: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0), output: u.output_tokens || 0 },
         });

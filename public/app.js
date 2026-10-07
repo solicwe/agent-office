@@ -57,8 +57,6 @@
     $("#setSwuRemember").checked = Boolean(store.get("agentOffice.swuKey"));
     $("#setSwuModel").value = settings.swuModel || config.swu?.model || "anthropic/claude-sonnet-5.5";
     $("#setSwuKey").placeholder = config.swu?.serverKey ? "ใช้ SWU key ในไฟล์ .env ของเซิร์ฟเวอร์อยู่แล้ว (เว้นว่างได้)" : "API key จากเว็บไซต์ SWU AI";
-    $("#setRemaining").value = "";
-    $("#setRemaining").placeholder = `ตอนนี้แสดง ${fmt(budget.remaining)}`;
     $("#usedText").textContent = `${fmt(budget.used)} tokens`;
     syncSettingsForm();
   }
@@ -96,7 +94,7 @@
   $("#setModel").addEventListener("change", syncSettingsForm);
   $("#settingsBtn").addEventListener("click", () => { fillSettings(); $("#settings").showModal(); });
   $("#resetUsage").addEventListener("click", async () => {
-    renderBudget(await api("/api/usage", { reset: true }));
+    renderBudget(await api("/api/usage/reset", {}));
     $("#usedText").textContent = `${fmt(budget.used)} tokens`;
   });
   $("#settings").addEventListener("close", async () => {
@@ -118,8 +116,6 @@
     store.del("agentOffice.key");
     store.del("agentOffice.key", sessionStorage);
     if (key) store.set("agentOffice.key", key, $("#setRemember").checked ? localStorage : sessionStorage);
-    const left = $("#setRemaining").value.trim();
-    if (!isGuest() && left !== "") renderBudget(await api("/api/usage", { remaining: Number(left) }));
   });
 
   // ---------- share with friends (owner only) ----------
@@ -167,17 +163,16 @@
     if (r) { await fetch(`/api/invites/${encodeURIComponent(r.dataset.revoke)}`, { method: "DELETE" }); renderInvites(); }
   });
 
-  // ---------- token budget ----------
-  let budget = { budget: 0, used: 0, remaining: 0 };
+  // ---------- token usage ----------
+  let budget = { used: 0, exhausted: false };
   function renderBudget(b) {
     if (!b) return;
     budget = b;
-    $("#tokensLeft").textContent = fmt(b.remaining);
-    const pct = b.budget ? Math.max(0, Math.min(100, (b.remaining / b.budget) * 100)) : 0;
-    $("#tokenBar").style.width = pct + "%";
-    $("#tokenChip").classList.toggle("low", pct < 20 && pct > 0);
-    $("#tokenChip").classList.toggle("out", b.remaining <= 0);
-    $("#tokenChip").title = `ใช้ไป ${fmt(b.used)} tokens (นับจากตัวเลขจริงที่ API ส่งกลับ)${b.syncedAt ? ` · ตั้งยอดคงเหลือล่าสุด ${new Date(b.syncedAt).toLocaleString("th-TH")}` : ""}`;
+    $("#tokenText").textContent = b.exhausted ? (isGuest() ? "โควตาโทเค็นหมด" : "โทเค็นหมด") : `ใช้ไปแล้ว ${fmt(b.used)} tokens`;
+    $("#tokenChip").classList.toggle("out", Boolean(b.exhausted));
+    $("#tokenChip").title = b.exhausted
+      ? "ต้นทางแจ้งว่าโทเค็นหมด เมื่อต้นทางรีเซ็ตแล้วจะกลับมาใช้ได้และตัวนับเริ่มใหม่เอง"
+      : `นับตั้งแต่ ${b.since ? new Date(b.since).toLocaleString("th-TH") : "-"}${isGuest() && b.limit ? ` · โควตา ${fmt(b.limit)} tokens` : ""}`;
   }
 
   // ---------- examples + attachments ----------
@@ -411,7 +406,7 @@
     $("#fileTree").innerHTML = rows.join("");
     $("#fileCount").hidden = !paths.length;
     $("#fileCount").textContent = paths.length;
-    $("#filesInfo").textContent = (project ? project.dir + " · " : "") + (paths.length ? `${paths.length} ไฟล์` : "ยังไม่มีไฟล์");
+    $("#filesInfo").textContent = paths.length ? `${paths.length} ไฟล์` : "ยังไม่มีไฟล์";
   }
   function showFile(p) {
     currentFile = p;
@@ -422,6 +417,17 @@
     renderTree();
   }
   $("#fileTree").addEventListener("click", (e) => { const b = e.target.closest("[data-file]"); if (b) showFile(b.dataset.file); });
+  // Long lines wrap by default so nothing hides past the edge; toggle for raw layout.
+  const wrapOn = store.get("agentOffice.wrap") !== false;
+  $("#fileBody").classList.toggle("wrap", wrapOn);
+  $("#wrapToggle").classList.toggle("active", wrapOn);
+  $("#wrapToggle").addEventListener("click", () => {
+    const on = !$("#fileBody").classList.contains("wrap");
+    $("#fileBody").classList.toggle("wrap", on);
+    $("#wrapToggle").classList.toggle("active", on);
+    $("#wrapToggle").title = on ? "ตัดบรรทัดอยู่ (กดเพื่อเลื่อนซ้ายขวาแทน)" : "ไม่ตัดบรรทัด (กดเพื่อตัดบรรทัด)";
+    store.set("agentOffice.wrap", on);
+  });
 
   // ---------- tests ----------
   const rounds = [];
@@ -525,7 +531,6 @@
     try {
       const { dir, projects } = await api("/api/projects");
       projectList = projects;
-      $("#projectsDir").textContent = `บันทึกที่ ${dir}`;
       renderProjectNav();
     } catch { /* server not ready */ }
   }
@@ -550,7 +555,7 @@
 
   function setHeader() {
     $("#projectTitle").textContent = project ? project.name : "โปรเจกต์ใหม่";
-    $("#projectSub").textContent = project ? project.dir : "ทีม AI ที่วิเคราะห์ เขียนโค้ด ทดสอบ รีวิว และแก้บั๊ก จนกว่างานจะผ่าน";
+    $("#projectSub").textContent = project ? "ดูทีมทำงาน สั่งงานเพิ่ม หรือทำต่อจากรอบที่ค้างได้" : "ทีม AI ที่วิเคราะห์ เขียนโค้ด ทดสอบ รีวิว และแก้บั๊ก จนกว่างานจะผ่าน";
     $("#taskLabel").textContent = project ? `สั่งงานเพิ่มในโปรเจกต์นี้ (ทีมจะแก้ต่อจากไฟล์ล่าสุด)` : "งานจากลูกค้า";
     $("#nameField").hidden = Boolean(project);
     renderProjectNav();
@@ -662,7 +667,26 @@
     $("#jobBar").hidden = !project;
     $("#jobPills").innerHTML = jobs.map((j, i) => `<button data-job="${esc(j.id)}" class="${j.id === activeId ? "active" : ""}" title="${esc(j.task || "")}"><span class="sdot ${esc(j.status || "")}"></span><span>รอบ ${i + 1} · ${esc((j.task || "").slice(0, 28))}</span></button>`).join("");
     $("#openDemoTop").href = project?.demoPath || "#";
+    // The latest round stopped part-way: offer to continue it instead of starting over.
+    const last = jobs.at(-1);
+    resumable = last && !meta?.runningJob && RESUMABLE.includes(last.status) ? last.id : null;
+    $("#resumeBtn").hidden = !resumable;
   }
+  const RESUMABLE = ["interrupted", "failed", "cancelled", "out-of-tokens"];
+  let resumable = null;
+  $("#resumeBtn").addEventListener("click", async () => {
+    if (!project || !resumable) return;
+    if (!connected()) { fillSettings(); $("#settings").showModal(); return; }
+    try {
+      const data = await api("/api/jobs", { projectSlug: project.slug, resumeJobId: resumable, task: "", ...llmBody() });
+      resetView();
+      renderJobs(await api(`/api/projects/${encodeURIComponent(project.slug)}`), data.id);
+      connect(data.id, project.slug);
+      loadProjects();
+    } catch (err) {
+      chatSys(err.message, "bad", "OctagonAlert");
+    }
+  });
   $("#jobPills").addEventListener("click", (e) => {
     const b = e.target.closest("[data-job]");
     if (!b || !project) return;
@@ -676,7 +700,7 @@
     try { meta = await api(`/api/projects/${encodeURIComponent(slug)}`); } catch (err) { chatSys(err.message, "bad", "OctagonAlert"); return; }
     stopStream();
     resetView();
-    project = { slug, name: meta.name || slug, dir: meta.dir, demoPath: meta.demoPath };
+    project = { slug, name: meta.name || slug, demoPath: meta.demoPath };
     store.set("agentOffice.project", slug, sessionStorage);
     setHeader();
     const jobId = meta.runningJob || meta.jobs?.at(-1)?.id;
@@ -721,11 +745,11 @@
   async function handle(e) {
     switch (e.type) {
       case "project":
-        if (!project || project.slug !== e.slug) project = { slug: e.slug, name: e.name, dir: e.dir, demoPath: e.demoPath };
+        if (!project || project.slug !== e.slug) project = { slug: e.slug, name: e.name, demoPath: e.demoPath };
         $("#saveLocalBtn").hidden = false;
         $("#zipBtn").hidden = false;
         $("#zipBtn").href = `/api/projects/${encodeURIComponent(e.slug)}/project.zip`;
-        chatSys(e.followUp ? `สั่งงานเพิ่ม: ${e.task}` : `โปรเจกต์ใหม่ บันทึกที่ ${e.dir}`, "", e.followUp ? "MessageSquarePlus" : "FolderOpen");
+        chatSys(e.resume ? "ทำงานต่อจากรอบที่ค้าง" : e.followUp ? `สั่งงานเพิ่ม: ${e.task}` : "เริ่มโปรเจกต์ใหม่", "", e.resume ? "Play" : e.followUp ? "MessageSquarePlus" : "FolderOpen");
         break;
       case "init":
         chatSys("ทีมรวมตัวที่ห้องประชุม", "", "Inbox");
@@ -817,9 +841,13 @@
         refreshPreview(false);
         await wait(2000);
         break;
+      case "notice":
+        chatSys(e.message, "", "RotateCw");
+        break;
       case "error":
         chatSys(e.message, "bad", "OctagonAlert");
         ORDER.forEach((id) => { office.setStatus(id, "idle"); setMember(id, "idle"); });
+        if (e.resumable) office.lab("idle");
         break;
       case "end":
         finishStream();
@@ -875,9 +903,15 @@
     jobId = id;
     connectedAt = Date.now();
     setRunning(true);
+    let lastSeq = -1;
     source = new EventSource(`/api/jobs/${id}/events?project=${encodeURIComponent(slug)}`);
     source.onmessage = (m) => {
       const e = JSON.parse(m.data);
+      // After a reconnect the server may replay the whole log: skip what we already have.
+      if (typeof e.seq === "number") {
+        if (e.seq <= lastSeq) return;
+        lastSeq = e.seq;
+      }
       if (e.type === "end") source?.close(); // otherwise EventSource reconnects forever
       enqueue(e, gen);
     };
@@ -903,7 +937,7 @@
       resetView();
       attached = []; $("#attachInfo").textContent = "";
       const meta = await api(`/api/projects/${encodeURIComponent(data.slug)}`);
-      project = { slug: data.slug, name: meta.name || data.slug, dir: meta.dir, demoPath: meta.demoPath };
+      project = { slug: data.slug, name: meta.name || data.slug, demoPath: meta.demoPath };
       store.set("agentOffice.project", data.slug, sessionStorage);
       setHeader();
       renderJobs(meta, data.id);

@@ -6,20 +6,30 @@ import path from "node:path";
 
 const dir = await mkdtemp(path.join(tmpdir(), "agent-office-usage-"));
 process.env.USAGE_FILE = path.join(dir, "usage.json");
-process.env.TOKEN_BUDGET = "100000";
 const usage = await import("../src/usage.js");
 test.after(() => rm(dir, { recursive: true, force: true }));
 
-test("tokens reported by the API are subtracted from the budget", () => {
+test("counts the tokens the provider reports", () => {
   usage.addUsage(1200, 300);
-  assert.equal(usage.snapshot().used, 1500);
-  assert.equal(usage.snapshot().remaining, 98_500);
+  usage.addUsage(500, 0);
+  assert.equal(usage.snapshot().used, 2000);
+  assert.equal(usage.snapshot().exhausted, false);
 });
 
-test("setting the real remaining balance makes the counter match it", () => {
-  usage.configure({ remaining: 50_000 });
-  assert.equal(usage.snapshot().remaining, 50_000);
-  usage.addUsage(1000, 0);
-  assert.equal(usage.snapshot().remaining, 49_000);
-  assert.ok(usage.snapshot().syncedAt);
+test("out of tokens is flagged, and the next success means the provider reset", () => {
+  usage.markExhausted();
+  assert.equal(usage.snapshot().exhausted, true);
+  usage.addUsage(10, 5); // provider works again
+  const s = usage.snapshot();
+  assert.equal(s.exhausted, false);
+  assert.equal(s.used, 15, "counter restarted from zero");
+  assert.equal(s.lastReset.reason, "upstream");
+});
+
+test("quota errors are told apart from short rate limits", () => {
+  assert.equal(usage.isQuotaError({ status: 429, message: "rate_limit_error: too many requests" }), false);
+  assert.equal(usage.isQuotaError({ status: 429, message: "monthly quota exceeded" }), true);
+  assert.equal(usage.isQuotaError({ status: 400, message: "Your credit balance is too low" }), true);
+  assert.equal(usage.isQuotaError({ status: 402, message: "" }), true);
+  assert.equal(usage.isQuotaError({ status: 500, message: "server error" }), false);
 });

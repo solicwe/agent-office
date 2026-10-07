@@ -56,14 +56,15 @@ test("invite link makes a guest who sees only their own projects and quota", asy
   const cfg = await (await fetch(BASE + "/api/config", { headers: guest })).json();
   assert.equal(cfg.role, "guest");
   assert.equal(cfg.userName, "Ton");
-  assert.equal(cfg.usage.remaining, 5000);
+  assert.equal(cfg.usage.limit, 5000);
+  assert.equal(cfg.usage.used, 0);
   assert.equal(cfg.localClaude.available, false, "guests never get the owner's Claude login");
 
   const list = await (await fetch(BASE + "/api/projects", { headers: guest })).json();
   assert.deepEqual(list.projects, []);
   assert.equal((await fetch(BASE + "/api/projects/owner-shop", { headers: guest })).status, 404);
   assert.equal((await fetch(BASE + "/api/invites", { headers: guest })).status, 403);
-  assert.equal((await fetch(BASE + "/api/usage", { method: "POST", headers: { ...guest, "Content-Type": "application/json" }, body: "{}" })).status, 403);
+  assert.equal((await fetch(BASE + "/api/usage/reset", { method: "POST", headers: { ...guest, "Content-Type": "application/json" }, body: "{}" })).status, 403);
 
   // No API key set for friends yet: starting a job is refused with a clear message.
   const job = await fetch(BASE + "/api/jobs", { method: "POST", headers: { ...guest, "Content-Type": "application/json" }, body: JSON.stringify({ task: "x" }) });
@@ -113,7 +114,7 @@ test("friends in a project can invite several more people out of their own quota
   const res = await (await fetch(BASE + "/api/projects/club-site/invite", { method: "POST", headers: { ...ton, ...json }, body: JSON.stringify({ names: "Ploy, Mint", limit: 10000 }) })).json();
   assert.deepEqual(res.created.map((c) => c.name), ["Ploy", "Mint"]);
   const tonCfg = await (await fetch(BASE + "/api/config", { headers: ton })).json();
-  assert.equal(tonCfg.usage.remaining, 10000, "30k minus 2 x 10k given away");
+  assert.equal(tonCfg.usage.limit, 10000, "30k minus 2 x 10k given away");
 
   // Asking for more than is left gives only what remains, then stops.
   const greedy = await fetch(BASE + "/api/projects/club-site/invite", { method: "POST", headers: { ...ton, ...json }, body: JSON.stringify({ names: "A, B", limit: 10000 }) });

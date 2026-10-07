@@ -69,18 +69,18 @@ Design the project and split the work. Output:
 <say>…</say>
 <design>Thai markdown: architecture, file structure, every module's public API (global name, functions, parameters, return values, errors), data shapes, page layout with DOM ids, and notes for the tester.</design>
 <plan>JSON only: {"tasks":[{"id":"T1","title":"…","owner":"backend"|"frontend","files":["path", …],"depends":["T…"],"details":"what exactly to build"}]}</plan>
-Rules for the plan: 2-10 tasks; each task owns 1-4 files and every file belongs to exactly one task; logic/data/storage files go to backend, pages/styles/UI scripts to frontend; use depends only when a task truly needs another task's files; do not create test files (Tessa writes those).`,
+Rules for the plan: 2-16 tasks (bigger sites get more, smaller tasks); each task owns 1-3 files of at most ~400 lines each, and every file belongs to exactly one task; split big pages into several scripts/stylesheets rather than one huge file; logic/data/storage files go to backend, pages/styles/UI scripts to frontend; use depends only when a task truly needs another task's files; do not create test files (Tessa writes those).`,
 
-  implement: ({ spec, design, planText, files, task, focus }) => `${block("spec", spec)}
+  implement: ({ spec, design, planText, files, task, focus, only }) => `${block("spec", spec)}
 ${block("design", design)}
 ${block("plan", planText)}
-${block("project_files", digest(files, focus))}
+${block("project_files", digest(files, focus, 80_000))}
 Your task ${task.id}: ${task.title}
 ${task.details || ""}
 Files you own in this task: ${task.files.join(", ")}
-Output:
+${only ? `Your previous answer was cut off. The other files are saved already. Write ONLY these missing files now: ${only.join(", ")}. Keep each file focused; split very long content sensibly.\n` : "If a file would be very long, keep it lean (no repeated boilerplate) so every file fits in one answer.\n"}Output:
 <say>…</say>
-then one <file path="…">…</file> for each file you own in this task (full contents).`,
+then one <file path="…">…</file> for each ${only ? "missing file listed above" : "file you own in this task"} (full contents).`,
 
   tests: ({ spec, design, files }) => `${block("spec", spec)}
 ${block("design", design)}

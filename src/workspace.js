@@ -13,14 +13,18 @@ export function safePath(p) {
   return /^[\w\-./ ]+$/.test(clean) ? clean : "";
 }
 
-/** Parse <file path="...">content</file> blocks from an agent reply. */
-export function parseFiles(text) {
+/**
+ * Parse <file path="...">content</file> blocks from an agent reply.
+ * dropUnclosed: the reply was cut off, so a last file without </file> is incomplete and skipped.
+ */
+export function parseFiles(text, { dropUnclosed = false } = {}) {
   const out = [];
-  const re = /<file\s+path=["']([^"']+)["']\s*>([\s\S]*?)(?:<\/file>|$(?![\s\S]))/gi;
+  const re = /<file\s+path=["']([^"']+)["']\s*>([\s\S]*?)(<\/file>|$(?![\s\S]))/gi;
   let m;
   while ((m = re.exec(text))) {
     const path = safePath(m[1]);
     if (!path) continue;
+    if (dropUnclosed && !m[3]) continue;
     out.push({ path, content: stripFence(m[2]).slice(0, MAX_FILE_BYTES) });
   }
   return out;

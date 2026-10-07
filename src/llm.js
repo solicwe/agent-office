@@ -14,6 +14,37 @@ export function serverHasKey() {
   return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 }
 
+const IDLE_MS = Number(process.env.LLM_IDLE_TIMEOUT_MS || 5 * 60 * 1000);
+
+/**
+ * Run a streaming request, aborting it if nothing arrives for IDLE_MS so a stuck
+ * connection can never freeze a job (the caller retries).
+ */
+async function streamWithWatchdog(start, { signal, onText }) {
+  const inner = new AbortController();
+  const onOuterAbort = () => inner.abort();
+  signal?.addEventListener("abort", onOuterAbort, { once: true });
+  let idle = false;
+  let timer;
+  const bump = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { idle = true; inner.abort(); }, IDLE_MS);
+  };
+  bump();
+  try {
+    const stream = start(inner.signal);
+    stream.on("streamEvent", bump);
+    stream.on("text", (delta) => onText?.(delta));
+    return await stream.finalMessage();
+  } catch (err) {
+    if (idle) throw Object.assign(new Error(`ไม่มีการตอบกลับจาก AI นานเกิน ${Math.round(IDLE_MS / 60000)} นาที`), { transient: true });
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onOuterAbort);
+  }
+}
+
 /** Real agents: every call is one streamed Claude request. */
 export class ClaudeLLM {
   constructor({ apiKey, model, effort } = {}) {
@@ -36,16 +67,14 @@ export class ClaudeLLM {
       params.betas = ["server-side-fallback-2026-07-01"];
       params.fallbacks = "default";
     }
-    const stream = this.client.beta.messages.stream(params, { signal });
-    stream.on("text", (delta) => onText?.(delta));
-    const msg = await stream.finalMessage();
+    const msg = await streamWithWatchdog((s) => this.client.beta.messages.stream(params, { signal: s }), { signal, onText });
     if (msg.stop_reason === "refusal") {
       const why = msg.stop_details?.explanation || msg.stop_details?.category || "no details";
       throw new Error(`Claude ปฏิเสธคำขอนี้ (${why})`);
     }
     const text = msg.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-    if (msg.stop_reason === "max_tokens") throw new Error("คำตอบยาวเกิน max_tokens ลองแบ่งงานให้เล็กลง");
-    return { text, usage: { input: msg.usage.input_tokens || 0, output: msg.usage.output_tokens || 0 } };
+    // A cut-off answer is returned, not thrown: the team asks again for whatever is missing.
+    return { text, truncated: msg.stop_reason === "max_tokens", usage: { input: msg.usage.input_tokens || 0, output: msg.usage.output_tokens || 0 } };
   }
 
   /** One short structured-output request (used by the brief interview). */
@@ -88,13 +117,11 @@ export class SwuLLM {
 
   // Gateway-compatible request: no beta features, effort or structured outputs.
   async call({ system, prompt, onText, signal }) {
-    const stream = this.client.messages.stream({ model: this.model, max_tokens: 32000, system, messages: [{ role: "user", content: prompt }] }, { signal });
-    stream.on("text", (delta) => onText?.(delta));
-    const msg = await stream.finalMessage();
+    const params = { model: this.model, max_tokens: 32000, system, messages: [{ role: "user", content: prompt }] };
+    const msg = await streamWithWatchdog((s) => this.client.messages.stream(params, { signal: s }), { signal, onText });
     const text = msg.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-    if (msg.stop_reason === "max_tokens") throw new Error("คำตอบยาวเกิน max_tokens ลองแบ่งงานให้เล็กลง");
-    if (!text) throw new Error(`SWU AI ไม่ได้ตอบข้อความกลับมา (stop_reason: ${msg.stop_reason})`);
-    return { text, usage: { input: msg.usage?.input_tokens || 0, output: msg.usage?.output_tokens || 0 } };
+    if (!text) throw Object.assign(new Error(`SWU AI ไม่ได้ตอบข้อความกลับมา (stop_reason: ${msg.stop_reason})`), { transient: true });
+    return { text, truncated: msg.stop_reason === "max_tokens", usage: { input: msg.usage?.input_tokens || 0, output: msg.usage?.output_tokens || 0 } };
   }
 
   async json({ system, prompt, schema }) {

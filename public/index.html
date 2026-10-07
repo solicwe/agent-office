@@ -24,7 +24,6 @@
     <button id="newProjectBtn" class="btn primary block"><i data-icon="Plus"></i>โปรเจกต์ใหม่</button>
     <div class="side-label">โปรเจกต์ทั้งหมด</div>
     <nav id="projectNav" class="project-nav"><p class="muted small pad">ยังไม่มีโปรเจกต์</p></nav>
-    <p id="projectsDir" class="muted small path pad"></p>
   </aside>
   <div id="sidebarScrim" class="scrim" hidden></div>
 
@@ -38,7 +37,7 @@
         </div>
       </div>
       <div class="meters">
-        <span id="tokenChip" class="chip token-chip" title="โทเค็นคงเหลือจากงบที่ตั้งไว้"><span>เหลือ <b id="tokensLeft">-</b> tokens</span><i class="meter"><i id="tokenBar"></i></i></span>
+        <span id="tokenChip" class="chip token-chip"><i data-icon="Activity"></i><span id="tokenText">ใช้ไปแล้ว 0 tokens</span></span>
         <span id="guestChip" class="chip" hidden><i data-icon="User"></i><span id="guestName"></span></span>
         <button id="shareBtn" class="btn small ghost" hidden><i data-icon="UserPlus"></i>แชร์ให้เพื่อน</button>
         <button id="settingsBtn" class="btn icon-only" aria-label="ตั้งค่า" title="ตั้งค่า"><i data-icon="Settings" data-size="18"></i></button>
@@ -50,6 +49,7 @@
       <div id="jobPills" class="job-pills"></div>
       <span class="row-gap push">
         <span id="sharedBadge" class="chip" hidden><i data-icon="Users"></i><span></span></span>
+        <button id="resumeBtn" class="btn small primary" hidden><i data-icon="Play"></i>ทำงานต่อจากที่ค้าง</button>
         <button id="membersBtn" class="btn small ghost" hidden><i data-icon="UserPlus"></i>ชวนเพื่อนร่วมแก้</button>
         <button id="copyLinkTop" class="btn small ghost"><i data-icon="Link"></i>คัดลอกลิงก์เดโม่</button>
         <a id="openDemoTop" class="btn small ghost" target="_blank" rel="noopener"><i data-icon="ExternalLink"></i>เปิดเดโม่</a>
@@ -128,7 +128,10 @@
           </div>
           <div class="files">
             <ul id="fileTree" class="file-tree"></ul>
-            <div class="file-view"><div id="fileHead" class="file-head"></div><pre id="fileBody" class="code"></pre></div>
+            <div class="file-view">
+              <div class="file-head"><span id="fileHead" class="file-name"></span><button type="button" id="wrapToggle" class="btn small ghost" title="สลับการตัดบรรทัด"><i data-icon="WrapText"></i></button></div>
+              <pre id="fileBody" class="code wrap"></pre>
+            </div>
           </div>
         </div>
 
@@ -292,11 +295,8 @@
         <label class="check"><input type="checkbox" id="setRemember"> จำ API key ไว้ในเบราว์เซอร์นี้</label>
         <p class="muted small" id="keyNote"></p>
       </div>
-      <div class="grid2 owner-only">
-        <label>โทเค็นคงเหลือจริงตอนนี้<input id="setRemaining" type="number" min="0" step="1000" placeholder="ดูตัวเลขจากเว็บ SWU AI"></label>
-        <label>ใช้ไปแล้ว (ตามที่ API รายงาน)<span class="usage-row"><span id="usedText" class="muted small"></span><button type="button" id="resetUsage" class="btn small ghost"><i data-icon="RotateCcw"></i>รีเซ็ต</button></span></label>
-      </div>
-      <p class="muted small owner-only" id="budgetNote">SWU AI ไม่มี API บอกโควตาคงเหลือ ระบบจึงหักตามจำนวน token จริงที่ส่งกลับมาในทุกคำตอบ ใส่ยอดคงเหลือจากเว็บ SWU AI ที่นี่เพื่อให้ตัวเลขตรงกัน</p>
+      <label class="owner-only">โทเค็นที่ใช้ไปแล้ว<span class="usage-row"><span id="usedText" class="muted small"></span><button type="button" id="resetUsage" class="btn small ghost"><i data-icon="RotateCcw"></i>รีเซ็ต</button></span></label>
+      <p class="muted small owner-only">นับจากจำนวนจริงที่ AI ส่งกลับมาทุกครั้ง ถ้าต้นทางแจ้งว่าโทเค็นหมดจะขึ้นว่า "โทเค็นหมด" และเมื่อต้นทางรีเซ็ตโควตาแล้ว ตัวนับจะเริ่มใหม่จาก 0 ให้เอง</p>
       <footer class="dialog-foot">
         <button value="cancel" class="btn ghost">ยกเลิก</button>
         <button value="save" id="saveSettings" class="btn primary">บันทึก</button>

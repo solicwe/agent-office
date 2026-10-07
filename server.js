@@ -56,17 +56,39 @@ app.use("/api", (req, res, next) => {
 });
 const ownerOnly = (req, res, next) => (req.user.role === "owner" ? next() : res.status(403).json({ error: "เฉพาะเจ้าของเครื่อง" }));
 
-/** Token budget as this user sees it: the owner sees the whole budget, a friend sees their quota. */
+/**
+ * Token usage as this user sees it: the owner sees everything used since the last
+ * reset; a friend sees what they used and whether their quota is gone.
+ */
 function budgetFor(user) {
   const g = usage.snapshot();
-  if (user.role !== "guest") return g;
+  if (user.role !== "guest") return { used: g.used, exhausted: g.exhausted, since: g.since, lastReset: g.lastReset };
   const inv = user.invite;
-  return { budget: inv.limit, used: inv.used, remaining: Math.min(access.inviteRemaining(inv), g.remaining) };
+  return { used: inv.used, limit: inv.limit, exhausted: g.exhausted || access.inviteRemaining(inv) <= 0, since: inv.createdAt };
 }
+const isOut = (user) => user.role === "guest" && access.inviteRemaining(user.invite) <= 0;
 function charge(user, input, output) {
   usage.addUsage(input, output);
   if (user.role === "guest") access.chargeInvite(user.invite.code, (input || 0) + (output || 0));
   return budgetFor(user);
+}
+const hasFriendKey = () => serverHasKey() || Boolean(process.env.SWU_API_KEY);
+
+/** Tag "out of tokens" errors so a job stops cleanly and the counter shows หมด. */
+function watchQuota(llm) {
+  const call = llm.call.bind(llm);
+  llm.call = async (opts) => {
+    try {
+      return await call(opts);
+    } catch (err) {
+      if (usage.isQuotaError(err)) {
+        usage.markExhausted();
+        throw Object.assign(err, { quota: true, transient: false });
+      }
+      throw err;
+    }
+  };
+  return llm;
 }
 
 async function canAccessProject(user, slug) {
@@ -94,9 +116,9 @@ app.get("/api/config", async (req, res) => {
 });
 
 app.get("/api/usage", (req, res) => res.json(budgetFor(req.user)));
-app.post("/api/usage", ownerOnly, (req, res) => res.json(usage.configure(req.body || {})));
+app.post("/api/usage/reset", ownerOnly, (req, res) => res.json(usage.resetCount("manual")));
 
-app.get("/api/invites", ownerOnly, (_req, res) => res.json({ invites: access.listInvites(), shareBases: shareBases(), serverHasKey: serverHasKey() }));
+app.get("/api/invites", ownerOnly, (_req, res) => res.json({ invites: access.listInvites(), shareBases: shareBases(), serverHasKey: hasFriendKey() }));
 app.post("/api/invites", ownerOnly, (req, res) => res.json(access.createInvite(req.body || {})));
 app.delete("/api/invites/:code", ownerOnly, (req, res) => { access.revokeInvite(req.params.code); res.json({ ok: true }); });
 app.post("/api/swu/models", ownerOnly, async (req, res) => {
@@ -147,9 +169,9 @@ app.post("/api/brief", async (req, res) => {
   const idea = String(body.idea || "").slice(0, 2000);
   const answers = (Array.isArray(body.answers) ? body.answers : []).slice(0, 10).map((a) => ({ question: String(a?.question || "").slice(0, 500), answer: String(a?.answer || "").slice(0, 2000) }));
   const finish = Boolean(body.finish);
-  if (budgetFor(req.user).remaining <= 0) return res.json({ ...offlineStep(idea, answers, finish), mode: "offline", warning: "โทเค็นหมดแล้ว" });
+  if (isOut(req.user)) return res.json({ ...offlineStep(idea, answers, finish), mode: "offline", warning: "โควตาโทเค็นของคุณหมดแล้ว" });
   try {
-    const llm = await makeLLM(body, req.user);
+    const llm = watchQuota(await makeLLM(body, req.user));
     const { data, usage: u } = await llm.json({ system: BRIEF_SYSTEM, prompt: briefPrompt(idea, answers, finish), schema: BRIEF_SCHEMA });
     res.json({ ...data, options: (data.options || []).slice(0, 8), mode: "claude", usage: charge(req.user, u.input, u.output) });
   } catch (err) {
@@ -164,16 +186,31 @@ const runningJobFor = (slug) => [...jobs.entries()].find(([, j]) => j.slug === s
 app.post("/api/jobs", async (req, res) => {
   const body = req.body || {};
   const user = req.user;
-  const task = String(body.task || "").trim();
+  let task = String(body.task || "").trim();
   const existingSlug = body.projectSlug && projectExists(body.projectSlug) ? body.projectSlug : null;
-  if (!task) return res.status(400).json({ error: "กรุณาใส่รายละเอียดงาน" });
   if (existingSlug && !(await canAccessProject(user, existingSlug))) return res.status(403).json({ error: "ไม่มีสิทธิ์ในโปรเจกต์นี้" });
+
+  // "Continue where it stopped": rebuild the spec, design and task list from the old job's log.
+  let resume;
+  if (body.resumeJobId && existingSlug) {
+    const old = await readJobEvents(existingSlug, String(body.resumeJobId)).catch(() => null);
+    if (!old) return res.status(404).json({ error: "ไม่พบประวัติงานที่จะทำต่อ" });
+    task = old.find((e) => e.type === "project")?.task || task;
+    const tasksEvt = [...old].reverse().find((e) => e.type === "tasks");
+    if (tasksEvt) {
+      const lastState = {};
+      for (const e of old) if (e.type === "task") lastState[e.id] = e.state;
+      const lastDoc = (name) => [...old].reverse().find((e) => e.type === "doc" && e.name === name)?.content || "";
+      resume = { spec: lastDoc("spec"), design: lastDoc("design"), tasks: tasksEvt.tasks, done: tasksEvt.tasks.filter((t) => lastState[t.id] === "done").map((t) => t.id) };
+    }
+  }
+  if (!task) return res.status(400).json({ error: "กรุณาใส่รายละเอียดงาน" });
   if (running() >= MAX_RUNNING) return res.status(429).json({ error: "มีงานกำลังทำอยู่เต็มแล้ว ลองใหม่อีกครั้งเมื่องานเดิมเสร็จ" });
   if (existingSlug && runningJobFor(existingSlug)) return res.status(409).json({ error: "โปรเจกต์นี้มีงานกำลังทำอยู่ รอให้เสร็จก่อน" });
-  if (budgetFor(user).remaining <= 0) return res.status(402).json({ error: user.role === "guest" ? "โควตาโทเค็นของคุณหมดแล้ว ขอเพิ่มจากเจ้าของเครื่อง" : "โทเค็นหมดงบที่ตั้งไว้แล้ว เพิ่มงบหรือรีเซ็ตในหน้าตั้งค่า" });
+  if (isOut(user)) return res.status(402).json({ error: "โควตาโทเค็นของคุณหมดแล้ว ขอเพิ่มจากเจ้าของเครื่อง" });
   let llm;
   try {
-    llm = await makeLLM(body, user);
+    llm = watchQuota(await makeLLM(body, user));
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message });
   }
@@ -196,12 +233,12 @@ app.post("/api/jobs", async (req, res) => {
       const name = String(body.projectName || "").trim() || guessName(task);
       project = await createProject(name, { task, owner: user.id, ownerName: user.name });
     }
-    await recordJob(project.slug, { id, task, status: "running", createdAt: new Date().toISOString(), model: llm.model, by: user.name });
+    await recordJob(project.slug, { id, task, status: "running", createdAt: new Date().toISOString(), model: llm.model, by: user.name, resumeOf: resume ? String(body.resumeJobId) : undefined });
   } catch (err) {
     return res.status(500).json({ error: `สร้างโฟลเดอร์โปรเจกต์ไม่ได้: ${err.message}` });
   }
 
-  const job = { events: [], clients: new Set(), done: false, abort: new AbortController(), slug: project.slug, owner: user.id, writes: Promise.resolve(), pending: [] };
+  const job = { id, events: [], clients: new Set(), done: false, abort: new AbortController(), slug: project.slug, owner: user.id, writes: Promise.resolve(), pending: [], seq: 0 };
   jobs.set(id, job);
 
   // Persist events (minus streaming deltas) so the conversation can be reopened later.
@@ -212,8 +249,10 @@ app.post("/api/jobs", async (req, res) => {
   };
   const flushTimer = setInterval(flush, 1000);
 
+  job.flush = flush;
   const emit = (evt) => {
-    const e = { ...evt, t: Date.now() };
+    // seq lets the browser skip events it already has when a stream is replayed.
+    const e = { ...evt, t: Date.now(), seq: job.seq++ };
     if (e.type === "file") {
       // Serialize writes so a newer version of a file never lands before an older one.
       job.writes = job.writes.then(() => writeProjectFile(job.slug, e.path, e.content)).catch((err) => console.error("[write]", err.message));
@@ -222,21 +261,22 @@ app.post("/api/jobs", async (req, res) => {
     job.events.push(e);
     const chunk = `id: ${job.events.length - 1}\ndata: ${JSON.stringify(e)}\n\n`;
     for (const c of job.clients) c.write(chunk);
-    // Count tokens; stop the job when this user's budget runs out.
+    // Count tokens; a friend's job stops when their quota is used up.
     if (e.type === "usage") {
       const b = charge(user, e.input, e.output);
       emit({ type: "budget", ...b });
-      if (b.remaining <= 0 && !job.abort.signal.aborted) { job.outOfBudget = true; job.abort.abort(); }
+      if (isOut(user) && !job.abort.signal.aborted) { job.outOfBudget = true; job.abort.abort(); }
     }
   };
+  job.emit = emit;
 
   const settings = body.settings || {};
   emit({ type: "mode", model: llm.model, effort: llm.effort, via: llm instanceof LocalClaudeLLM ? "local" : llm instanceof SwuLLM ? "swu" : "api" });
   const meta = await readMeta(project.slug);
-  emit({ type: "project", slug: project.slug, name: meta?.name || project.slug, dir: user.role === "owner" ? project.dir : project.slug, jobId: id, followUp: Boolean(existingSlug), task, demoPath: `/p/${encodeURIComponent(project.slug)}/` });
+  emit({ type: "project", slug: project.slug, name: meta?.name || project.slug, jobId: id, followUp: Boolean(existingSlug), resume: Boolean(resume), task, demoPath: `/p/${encodeURIComponent(project.slug)}/` });
   let outcome = { status: "failed" };
   runJob({
-    input: { task, files },
+    input: { task, files, resume },
     llm,
     emit,
     signal: job.abort.signal,
@@ -245,9 +285,14 @@ app.post("/api/jobs", async (req, res) => {
     .then((r) => { outcome = { status: r.success ? "passed" : "needs-work" }; })
     .catch((err) => {
       if (!job.abort.signal.aborted) console.error("[job]", id, err);
-      outcome = { status: job.abort.signal.aborted ? "cancelled" : "failed", error: describeError(err) };
-      const message = job.outOfBudget ? "โทเค็นหมดแล้ว ทีมหยุดทำงาน เพิ่มงบแล้วสั่งงานต่อได้" : job.abort.signal.aborted ? "หยุดงานแล้ว" : describeError(err);
-      emit({ type: "error", message });
+      const quota = err?.quota || job.outOfBudget;
+      outcome = { status: quota ? "out-of-tokens" : job.shuttingDown ? "interrupted" : job.abort.signal.aborted ? "cancelled" : "failed", error: describeError(err) };
+      const message = quota
+        ? "โทเค็นหมด ทีมหยุดทำงาน เมื่อโทเค็นกลับมาแล้วกด ทำงานต่อ ได้"
+        : job.shuttingDown ? "เซิร์ฟเวอร์ถูกปิดระหว่างทำงาน กด ทำงานต่อ เพื่อทำต่อจากที่ค้าง"
+        : job.abort.signal.aborted ? "หยุดงานแล้ว กด ทำงานต่อ ได้" : `${describeError(err)} กด ทำงานต่อ เพื่อลองต่อจากที่ค้าง`;
+      emit({ type: "error", message, resumable: true });
+      if (quota) emit({ type: "budget", ...budgetFor(user) });
     })
     .finally(async () => {
       job.done = true;
@@ -275,7 +320,12 @@ app.get("/api/jobs/:id/events", async (req, res) => {
     if (!saved) return res.status(404).end();
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
     saved.forEach((e, i) => res.write(`id: ${i}\ndata: ${JSON.stringify(e)}\n\n`));
-    if (saved.at(-1)?.type !== "end") res.write(`id: ${saved.length}\ndata: ${JSON.stringify({ type: "end", t: Date.now() })}\n\n`);
+    if (saved.at(-1)?.type !== "end") {
+      // The log stops without an end: the server went down while this job was running.
+      const t = (saved.at(-1)?.t || Date.now()) + 1;
+      res.write(`data: ${JSON.stringify({ type: "error", message: "งานนี้ถูกขัดจังหวะ (เซิร์ฟเวอร์ปิดไประหว่างทำงาน) กด ทำงานต่อ เพื่อทำต่อจากที่ค้าง", resumable: true, t })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: "end", t })}\n\n`);
+    }
     return res.end();
   }
   if (!(await canAccessProject(req.user, job.slug))) return res.status(404).end();
@@ -331,7 +381,7 @@ app.get("/api/projects/:slug/members", async (req, res) => {
     const canSeeLink = req.user.role === "owner" || (mine && inv.invitedBy === mine);
     return { name: inv.name, used: inv.used, limit: inv.limit, invitedBy: inv.invitedBy ? access.inviteByCode(inv.invitedBy)?.name : "เจ้าของเครื่อง", code: canSeeLink ? inv.code : undefined, you: inv.code === mine };
   }).filter(Boolean);
-  res.json({ members, owner: meta.ownerName || "เจ้าของเครื่อง", yourRemaining: budgetFor(req.user).remaining });
+  res.json({ members, owner: meta.ownerName || "เจ้าของเครื่อง", yourRemaining: req.user.role === "guest" ? access.inviteRemaining(req.user.invite) : null });
 });
 
 // Invite one or many people into a project at once. Anyone in the project may invite;
@@ -456,7 +506,54 @@ function describeError(err) {
   return err?.message || String(err);
 }
 
+// ---------- robustness: interrupted jobs, safe shutdown, quota reset ----------
+
+/** Jobs still marked "running" from a previous run of the server were interrupted. */
+async function markStaleJobs() {
+  for (const m of await listProjects()) {
+    for (const j of m.jobs || []) {
+      if (j.status === "running" && !jobs.has(j.id)) await recordJob(m.slug, { id: j.id, status: "interrupted" }).catch(() => {});
+    }
+  }
+}
+
+/** Stop cleanly: tell watchers, save the logs, mark jobs resumable, then exit. */
+let shuttingDown = false;
+async function shutdown(sig) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const live = [...jobs.values()].filter((j) => !j.done);
+  if (live.length) console.log(`\n  ${sig}: saving ${live.length} running job(s) so they can be continued...`);
+  for (const j of live) {
+    j.shuttingDown = true;
+    j.abort.abort();
+  }
+  // Give the job handlers a moment to write their final events and status.
+  const deadline = Date.now() + 4000;
+  while (live.some((j) => !j.done) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+  await Promise.all(live.map((j) => { j.flush?.(); return j.writes; })).catch(() => {});
+  for (const j of live) await recordJob(j.slug, { id: j.id, status: "interrupted" }).catch(() => {});
+  process.exit(0);
+}
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sig, () => shutdown(sig));
+
+/**
+ * When the provider said "out of tokens", check every 15 minutes with a tiny request.
+ * The first success means the quota was reset upstream, and the counter resets too.
+ */
+setInterval(async () => {
+  if (!usage.snapshot().exhausted || !process.env.SWU_API_KEY) return;
+  try {
+    const r = await new SwuLLM({ token: process.env.SWU_API_KEY }).call({ system: "Reply with OK.", prompt: "OK" });
+    usage.addUsage(r.usage.input, r.usage.output);
+    console.log("  Token quota is back: usage counter reset");
+  } catch (err) {
+    if (!usage.isQuotaError(err)) console.error("[quota probe]", err.message);
+  }
+}, 15 * 60 * 1000).unref();
+
 app.listen(PORT, async () => {
+  await markStaleJobs().catch(() => {});
   console.log(`\n  Agent Office is running at http://localhost:${PORT}`);
   for (const b of shareBases()) console.log(`  Friends on your network:   ${b} (send them an invite link)`);
   console.log(`  Projects are saved in:     ${PROJECTS_DIR}`);
