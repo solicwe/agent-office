@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Little Goods</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap bar">
+      <a class="logo" href="#">Little Goods</a>
+      <button id="cartButton" class="cart-btn" aria-controls="cartPanel" aria-expanded="false">
+        ตะกร้า <span id="cartCount" class="pill">0</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <h1>ของใช้ดีๆ สำหรับทุกวัน</h1>
+      <p>ส่งฟรีเมื่อซื้อครบ 1,000 บาท · ใช้โค้ด SAVE10 ลด 10%</p>
+    </section>
+    <nav id="filters" class="filters" aria-label="หมวดหมู่"></nav>
+    <section id="productGrid" class="grid" aria-live="polite"></section>
+  </main>
+
+  <div id="overlay" class="overlay" hidden></div>
+  <aside id="cartPanel" class="cart" aria-hidden="true" aria-label="ตะกร้าสินค้า">
+    <div class="cart-head">
+      <h2>ตะกร้าสินค้า</h2>
+      <button id="closeCart" class="icon-btn" aria-label="ปิดตะกร้า">&times;</button>
+    </div>
+    <ul id="cartItems" class="cart-items"></ul>
+    <p id="emptyMsg" class="muted">ยังไม่มีสินค้าในตะกร้า</p>
+    <form id="codeForm" class="code-row">
+      <input id="codeInput" placeholder="โค้ดส่วนลด" autocomplete="off">
+      <button type="submit">ใช้โค้ด</button>
+    </form>
+    <p id="codeMsg" class="code-msg"></p>
+    <dl class="totals">
+      <dt>ยอดสินค้า</dt><dd id="subtotal">0</dd>
+      <dt>ส่วนลด</dt><dd id="discount">0</dd>
+      <dt>ค่าส่ง</dt><dd id="shipping">0</dd>
+      <dt class="grand">ยอดสุทธิ</dt><dd id="total" class="grand">0</dd>
+    </dl>
+    <button id="checkoutBtn" class="primary">สั่งซื้อ</button>
+  </aside>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script src="js/products.js"></script>
+  <script src="js/cart.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
