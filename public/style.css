@@ -121,7 +121,6 @@ body:not(.guest) .guest-only { display: none !important; }
 .share-sec code { font-size: 11.5px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; user-select: all; }
 .tunnel-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .tunnel-row p { margin: 0; flex: 1 1 220px; }
-.share-sec label { display: flex; flex-direction: column; gap: 4px; }
 .invite { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
 .invite .link-box { grid-column: 1 / -1; }
 .invite small { color: var(--muted); }
@@ -412,6 +411,7 @@ textarea:focus, input:focus, select:focus { outline: 2px solid color-mix(in srgb
 .dialog form { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
 .dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
 .dialog label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
+.dialog label.member-row { flex-direction: row; align-items: center; gap: 10px; font-weight: 400; cursor: pointer; }
 .dialog-head { display: flex; justify-content: space-between; align-items: center; }
 .dialog-head h2 { margin: 0; font-size: 16px; display: flex; gap: 8px; align-items: center; }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; }

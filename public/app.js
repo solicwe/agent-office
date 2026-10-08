@@ -141,15 +141,25 @@
     const { invites, serverHasKey } = await api("/api/invites");
     config.serverHasKey = serverHasKey;
     $("#serverKeyState").textContent = serverHasKey ? "ตั้ง API key สำหรับเพื่อนแล้ว (ใส่ใหม่เพื่อเปลี่ยน หรือเว้นว่างแล้วบันทึกเพื่อลบ)" : "ยังไม่ได้ตั้ง เพื่อนจะสั่งงานไม่ได้จนกว่าจะตั้ง";
-    $("#inviteList").innerHTML = invites.length ? invites.map((i) => `
+    // With a project open, links of friends in it open that project straight away.
+    const inProject = new Set(project ? projectMeta?.members || [] : []);
+    $("#inviteToProjectRow").hidden = !project;
+    $("#inviteNoProject").hidden = Boolean(project);
+    $("#inviteProjectName").textContent = project?.name || "";
+    $("#inviteList").innerHTML = invites.length ? invites.map((i) => {
+      const member = inProject.has("guest:" + i.code);
+      const link = member ? projectInviteUrl(i.code) : `${shareBase()}/i/${i.code}`;
+      return `
       <div class="invite">
-        <div><b>${esc(i.name)}</b> <small>ใช้ไป ${fmt(i.used)} / ${fmt(i.limit)} tokens</small></div>
+        <div><b>${esc(i.name)}</b> <small>ใช้ไป ${fmt(i.used)} / ${fmt(i.limit)} tokens</small>${member ? ` <span class="shared">อยู่ในโปรเจกต์นี้</span>` : ""}</div>
         <span class="row-gap">
-          <button type="button" class="btn small ghost" data-copy="${esc(shareBase() + "/i/" + i.code)}">${icon("Copy", 13)}คัดลอก</button>
+          ${project && !member ? `<button type="button" class="btn small ghost" data-join="${esc(i.code)}" title="ให้เพื่อนคนนี้เข้าโปรเจกต์ที่เปิดอยู่">${icon("UserPlus", 13)}ให้เข้าโปรเจกต์นี้</button>` : ""}
+          <button type="button" class="btn small ghost" data-copy="${esc(link)}">${icon("Copy", 13)}คัดลอก</button>
           <button type="button" class="btn small ghost" data-revoke="${esc(i.code)}">${icon("Ban", 13)}ยกเลิก</button>
         </span>
-        <code class="link-box">${esc(shareBase() + "/i/" + i.code)}</code>
-      </div>`).join("") : `<p class="muted small">ยังไม่มีลิงก์เชิญ</p>`;
+        <code class="link-box">${esc(link)}</code>
+      </div>`;
+    }).join("") : `<p class="muted small">ยังไม่มีลิงก์เชิญ</p>`;
   }
   // Outside link: a Cloudflare quick tunnel to Agent Office (each app gets its own when opened).
   let tunnelOn = false;
@@ -199,14 +209,22 @@
     renderInvites();
   });
   $("#createInvite").addEventListener("click", async () => {
-    const inv = await api("/api/invites", { name: $("#inviteName").value.trim() || "เพื่อน", limit: Number($("#inviteLimit").value) || 200000 });
+    const toProject = project && $("#inviteToProject").checked ? project.slug : undefined;
+    const inv = await api("/api/invites", { name: $("#inviteName").value.trim() || "เพื่อน", limit: Number($("#inviteLimit").value) || 200000, project: toProject });
     $("#inviteName").value = "";
+    if (inv.project && projectMeta) renderProjectActions({ ...projectMeta, members: [...(projectMeta.members || []), "guest:" + inv.code] });
     await renderInvites();
-    copyText(shareBase() + "/i/" + inv.code);
+    copyText(inv.project ? projectInviteUrl(inv.code) : `${shareBase()}/i/${inv.code}`);
   });
   $("#inviteList").addEventListener("click", async (e) => {
     const c = e.target.closest("[data-copy]");
     if (c) return copyText(c.dataset.copy, c);
+    const j = e.target.closest("[data-join]");
+    if (j && project) {
+      const { members } = await api(`/api/projects/${encodeURIComponent(project.slug)}/members`, { code: j.dataset.join, add: true });
+      renderProjectActions({ ...projectMeta, members });
+      return renderInvites();
+    }
     const r = e.target.closest("[data-revoke]");
     if (r) { await fetch(`/api/invites/${encodeURIComponent(r.dataset.revoke)}`, { method: "DELETE" }); renderInvites(); }
   });
@@ -1105,7 +1123,9 @@
     // An invite link for one project lands on /#p=<slug>.
     const fromLink = decodeURIComponent((location.hash.match(/^#p=(.+)$/) || [])[1] || "");
     if (fromLink) history.replaceState(null, "", location.pathname);
-    const last = fromLink || store.get("agentOffice.project", sessionStorage);
+    // A friend who was added to a project (even via a plain invite link) lands in it.
+    const shared = isGuest() ? projectList.find((p) => p.owner !== config.userId)?.slug : null;
+    const last = fromLink || store.get("agentOffice.project", sessionStorage) || shared;
     if (last && projectList.some((p) => p.slug === last)) openProject(last);
     else setHeader();
     if (!connected()) chatSys(isGuest() ? "เจ้าของเครื่องยังไม่ได้เปิดให้ใช้ Claude สำหรับเพื่อน" : "ยังไม่ได้เชื่อม Claude เปิดหน้าตั้งค่า (ไอคอนเฟือง) เพื่อเลือกวิธีเชื่อมต่อ", "", "Plug");

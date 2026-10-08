@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=16">
+  <link rel="stylesheet" href="style.css?v=18">
   <script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
@@ -179,7 +179,7 @@
   </div>
 
   <dialog id="share" class="dialog wide">
-    <form method="dialog">
+    <form method="dialog" novalidate>
       <header class="dialog-head">
         <h2><i data-icon="UserPlus"></i>แชร์ให้เพื่อนใช้</h2>
         <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
@@ -208,9 +208,11 @@
 
       <section class="share-sec">
         <h3 class="section-title">3. สร้างลิงก์เชิญ</h3>
+        <label class="check" id="inviteToProjectRow" hidden><input type="checkbox" id="inviteToProject" checked> ให้เพื่อนเข้าโปรเจกต์ที่เปิดอยู่ด้วย: <b id="inviteProjectName"></b></label>
+        <p class="muted small" id="inviteNoProject" hidden>ยังไม่ได้เปิดโปรเจกต์ ลิงก์นี้ให้เพื่อนเริ่มโปรเจกต์ของตัวเอง ถ้าจะให้เพื่อนทำโปรเจกต์เดียวกัน ให้เปิดโปรเจกต์นั้นก่อน แล้วค่อยกดปุ่มนี้</p>
         <div class="grid2">
           <label>ชื่อเพื่อน<input id="inviteName" placeholder="เช่น ต้น" maxlength="40"></label>
-          <label>โควตาโทเค็น<input id="inviteLimit" type="number" min="1000" step="10000" value="200000"></label>
+          <label>โควตาโทเค็น<input id="inviteLimit" type="number" min="1000" step="1000" value="200000"></label>
         </div>
         <button type="button" id="createInvite" class="btn primary"><i data-icon="Link"></i>สร้างลิงก์</button>
         <div id="inviteList" class="project-list"></div>
@@ -219,7 +221,7 @@
   </dialog>
 
   <dialog id="members" class="dialog wide">
-    <form method="dialog">
+    <form method="dialog" novalidate>
       <header class="dialog-head">
         <h2><i data-icon="UserPlus"></i>ชวนเพื่อนร่วมแก้ <span id="membersProject" class="muted"></span></h2>
         <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
@@ -231,7 +233,7 @@
         <h3 class="section-title">ชวนเพิ่ม (หลายคนพร้อมกันได้)</h3>
         <div class="grid2">
           <label>ชื่อเพื่อน<input id="memberName" placeholder="เช่น ต้น, ปอย, มิ้นท์" maxlength="300"></label>
-          <label>โควตาโทเค็นต่อคน<input id="memberLimit" type="number" min="1000" step="10000" value="100000"></label>
+          <label>โควตาโทเค็นต่อคน<input id="memberLimit" type="number" min="1000" step="1000" value="100000"></label>
         </div>
         <p class="muted small" id="memberQuota"></p>
         <button type="button" id="createMember" class="btn primary"><i data-icon="Link"></i>สร้างลิงก์เชิญ</button>
@@ -242,7 +244,7 @@
   </dialog>
 
   <dialog id="brief" class="dialog wide">
-    <form method="dialog" id="briefForm">
+    <form method="dialog" novalidate id="briefForm">
       <header class="dialog-head">
         <h2><i data-icon="MessageCircleQuestion"></i><span id="briefTitle">ช่วยคิดโจทย์กับ Nina</span></h2>
         <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
@@ -271,7 +273,7 @@
   </dialog>
 
   <dialog id="settings" class="dialog">
-    <form method="dialog" id="settingsForm">
+    <form method="dialog" novalidate id="settingsForm">
       <header class="dialog-head">
         <h2><i data-icon="SlidersHorizontal"></i>ตั้งค่า</h2>
         <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
@@ -333,8 +335,8 @@
     </form>
   </dialog>
 
-  <script src="icons.js?v=16"></script>
-  <script src="office.js?v=16"></script>
-  <script src="app.js?v=16"></script>
+  <script src="icons.js?v=18"></script>
+  <script src="office.js?v=18"></script>
+  <script src="app.js?v=18"></script>
 </body>
 </html>

@@ -109,6 +109,19 @@ test("a friend invited into a project can open it but not delete it; the owner c
   assert.equal((await f(BASE + "/api/projects/team-shop")).status, 404);
 });
 
+test("an invite made from the Share dialog with a project open lands the friend in that project", async () => {
+  const json = { "Content-Type": "application/json" };
+  await mkdir(path.join(dir, "projects", "open-now"), { recursive: true });
+  await writeFile(path.join(dir, "projects", "open-now", ".agent-office.json"), JSON.stringify({ slug: "open-now", name: "open-now", owner: "owner", jobs: [] }));
+  const inv = await (await f(BASE + "/api/invites", { method: "POST", headers: json, body: JSON.stringify({ name: "Mint", project: "open-now" }) })).json();
+  assert.equal(inv.project, "open-now");
+  const open = await f(`${BASE}/i/${inv.code}`, { headers: asStranger, redirect: "manual" });
+  const guest = { ...asStranger, Cookie: open.headers.get("set-cookie").split(";")[0] };
+  assert.equal((await f(BASE + "/api/projects/open-now", { headers: guest })).status, 200, "already a member");
+  const bogus = await (await f(BASE + "/api/invites", { method: "POST", headers: json, body: JSON.stringify({ name: "X", project: "../nope" }) })).json();
+  assert.equal(bogus.project, null, "unknown projects are ignored");
+});
+
 test("friends in a project can invite several more people out of their own quota", async () => {
   const json = { "Content-Type": "application/json" };
   await mkdir(path.join(dir, "projects", "club-site"), { recursive: true });

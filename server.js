@@ -162,7 +162,13 @@ app.get("/api/usage", (req, res) => res.json(budgetFor(req.user)));
 app.post("/api/usage/reset", ownerOnly, (req, res) => { usage.resetCount("manual"); res.json(budgetFor(req.user)); });
 
 app.get("/api/invites", ownerOnly, (_req, res) => res.json({ invites: access.listInvites(), shareBases: shareBases(), serverHasKey: hasFriendKey() }));
-app.post("/api/invites", ownerOnly, (req, res) => res.json(access.createInvite(req.body || {})));
+app.post("/api/invites", ownerOnly, async (req, res) => {
+  const inv = access.createInvite(req.body || {});
+  // Invited from inside a project: the friend lands in that project and can work on it.
+  const slug = typeof req.body?.project === "string" && isSlug(req.body.project) && projectExists(req.body.project) ? req.body.project : null;
+  if (slug) await setMember(slug, `guest:${inv.code}`, true);
+  res.json({ ...inv, project: slug });
+});
 app.delete("/api/invites/:code", ownerOnly, (req, res) => { access.revokeInvite(req.params.code); res.json({ ok: true }); });
 app.post("/api/swu/models", ownerOnly, async (req, res) => {
   try {
