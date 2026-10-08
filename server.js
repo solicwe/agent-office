@@ -9,6 +9,7 @@ import { ClaudeLLM, SwuLLM, swuModels, SWU_BASE_URL, MODELS, EFFORTS, DEFAULT_MO
 import { LocalClaudeLLM, localClaudeInfo } from "./src/claude-code.js";
 import * as usage from "./src/usage.js";
 import * as access from "./src/access.js";
+import { ensureApp, restartApp, stopApp, stopAll } from "./src/apprunner.js";
 import { safePath, zip } from "./src/workspace.js";
 import { PROJECTS_DIR, createProject, writeProjectFile, readMeta, loadProjectFiles, listProjects, isSlug, projectExists, appendJobEvents, readJobEvents, recordJob, deleteProject, setMember, canAccess, isProjectOwner } from "./src/projects.js";
 import { offlineStep, BRIEF_SCHEMA, BRIEF_SYSTEM, briefPrompt } from "./src/brief.js";
@@ -49,9 +50,37 @@ app.get("/i/:code", (req, res) => {
   res.redirect(p ? `/#p=${encodeURIComponent(p)}` : "/");
 });
 
+// Owner sign-in: start.bat / start.command open /owner?token=... from data/owner-token.txt.
+const OWNER_COOKIE_OPTS = { httpOnly: true, sameSite: "strict", maxAge: 365 * 24 * 3600 * 1000 };
+app.get("/owner", (req, res) => {
+  if (!access.isOwnerToken(req.query.token)) return res.status(403).type("text/plain; charset=utf-8").send("รหัสเจ้าของไม่ถูกต้อง");
+  res.cookie(access.OWNER_COOKIE, access.ownerToken, OWNER_COOKIE_OPTS);
+  res.redirect("/");
+});
+
+// Block cross-site writes: a page from another origin (for example an app the team
+// built, running on another port) must not be able to act on Agent Office.
+app.use("/api", (req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD") return next();
+  const site = req.headers["sec-fetch-site"];
+  const origin = req.headers.origin;
+  let crossSite = Boolean(site) && !["same-origin", "none"].includes(site);
+  if (!crossSite && origin) {
+    try { crossSite = origin === "null" || new URL(origin).host !== req.headers.host; } catch { crossSite = true; }
+  }
+  if (crossSite) return res.status(403).json({ error: "คำขอจากเว็บอื่นถูกปฏิเสธ" });
+  next();
+});
+
+app.post("/api/owner-login", (req, res) => {
+  if (!access.isOwnerToken(req.body?.token)) return res.status(403).json({ error: "รหัสเจ้าของไม่ถูกต้อง" });
+  res.cookie(access.OWNER_COOKIE, access.ownerToken, OWNER_COOKIE_OPTS);
+  res.json({ ok: true });
+});
+
 app.use("/api", (req, res, next) => {
   req.user = access.identify(req);
-  if (req.user.role === "none" && req.path !== "/config") return res.status(401).json({ error: "ต้องเปิดผ่านลิงก์เชิญจากเจ้าของเครื่อง" });
+  if (req.user.role === "none" && req.path !== "/config") return res.status(401).json({ error: "ต้องเปิดผ่านลิงก์เชิญ หรือเข้าสู่ระบบเจ้าของเครื่อง" });
   next();
 });
 const ownerOnly = (req, res, next) => (req.user.role === "owner" ? next() : res.status(403).json({ error: "เฉพาะเจ้าของเครื่อง" }));
@@ -101,6 +130,7 @@ app.get("/api/config", async (req, res) => {
   const user = req.user;
   res.json({
     role: user.role,
+    onThisMachine: access.isLoopback(req),
     userId: user.id || "",
     userName: user.name || "",
     serverHasKey: serverHasKey() || Boolean(process.env.SWU_API_KEY),
@@ -169,16 +199,34 @@ app.post("/api/brief", async (req, res) => {
   const idea = String(body.idea || "").slice(0, 2000);
   const answers = (Array.isArray(body.answers) ? body.answers : []).slice(0, 10).map((a) => ({ question: String(a?.question || "").slice(0, 500), answer: String(a?.answer || "").slice(0, 2000) }));
   const finish = Boolean(body.finish);
-  if (isOut(req.user)) return res.json({ ...offlineStep(idea, answers, finish), mode: "offline", warning: "โควตาโทเค็นของคุณหมดแล้ว" });
+  // Inside a project the interview is about changing that project, not starting over.
+  const project = body.projectSlug && projectExists(body.projectSlug) && (await canAccessProject(req.user, body.projectSlug))
+    ? await projectContext(body.projectSlug) : null;
+  if (isOut(req.user)) return res.json({ ...offlineStep(idea, answers, finish, project), mode: "offline", warning: "โควตาโทเค็นของคุณหมดแล้ว" });
   try {
     const llm = watchQuota(await makeLLM(body, req.user));
-    const { data, usage: u } = await llm.json({ system: BRIEF_SYSTEM, prompt: briefPrompt(idea, answers, finish), schema: BRIEF_SCHEMA });
-    res.json({ ...data, options: (data.options || []).slice(0, 8), mode: "claude", usage: charge(req.user, u.input, u.output) });
+    const { data, usage: u } = await llm.json({ system: BRIEF_SYSTEM, prompt: briefPrompt(idea, answers, finish, project), schema: BRIEF_SCHEMA });
+    res.json({ ...data, options: (data.options || []).slice(0, 8), mode: "claude", followUp: Boolean(project), usage: charge(req.user, u.input, u.output) });
   } catch (err) {
     console.error("[brief]", err.message);
-    res.json({ ...offlineStep(idea, answers, finish), mode: "offline", warning: describeError(err) });
+    res.json({ ...offlineStep(idea, answers, finish, project), mode: "offline", followUp: Boolean(project), warning: describeError(err) });
   }
 });
+
+/** What a project is so far: the latest summary/spec the team wrote and its file list. */
+async function projectContext(slug) {
+  const meta = (await readMeta(slug)) || {};
+  let summary = "", spec = "";
+  for (const j of [...(meta.jobs || [])].reverse()) {
+    const events = (await readJobEvents(slug, j.id).catch(() => null)) || [];
+    const last = (name) => [...events].reverse().find((e) => e.type === "doc" && e.name === name)?.content || "";
+    summary ||= last("summary");
+    spec ||= last("spec");
+    if (summary && spec) break;
+  }
+  const files = await loadProjectFiles(slug);
+  return { slug, name: meta.name || slug, summary: summary.slice(0, 4000), spec: spec.slice(0, 4000), tree: Object.keys(files).sort().join("\n").slice(0, 3000) };
+}
 
 // ---------- jobs ----------
 const runningJobFor = (slug) => [...jobs.entries()].find(([, j]) => j.slug === slug && !j.done)?.[0] || null;
@@ -301,6 +349,8 @@ app.post("/api/jobs", async (req, res) => {
       flush();
       await job.writes;
       await recordJob(job.slug, { id, ...outcome, finishedAt: new Date().toISOString() }).catch(() => {});
+      // Reload the live demo so it runs the files the team just wrote.
+      if (!shuttingDown) restartApp(job.slug, { onlyIfRunning: true }).catch(() => {});
       for (const c of job.clients) c.end();
       job.clients.clear();
       setTimeout(() => jobs.delete(id), JOB_TTL_MS).unref();
@@ -366,6 +416,7 @@ app.delete("/api/projects/:slug", async (req, res) => {
   if (!meta || !canAccess(req.user, meta)) return res.status(404).json({ error: "ไม่พบโปรเจกต์" });
   if (!isProjectOwner(req.user, meta)) return res.status(403).json({ error: "ลบได้เฉพาะเจ้าของโปรเจกต์" });
   if (runningJobFor(slug)) return res.status(409).json({ error: "ทีมกำลังทำงานในโปรเจกต์นี้อยู่ หยุดงานก่อนแล้วค่อยลบ" });
+  await stopApp(slug);
   await deleteProject(slug);
   res.json({ ok: true });
 });
@@ -415,6 +466,16 @@ app.post("/api/projects/:slug/members", ownerOnly, async (req, res) => {
   res.json({ members: meta.members });
 });
 
+// The project's live app (its own port). Starts it when needed.
+app.get("/api/projects/:slug/app", async (req, res) => {
+  if (!isSlug(req.params.slug) || !(await canAccessProject(req.user, req.params.slug))) return res.status(404).json({ error: "ไม่พบโปรเจกต์" });
+  res.json(await ensureApp(req.params.slug));
+});
+app.post("/api/projects/:slug/app/restart", async (req, res) => {
+  if (!isSlug(req.params.slug) || !(await canAccessProject(req.user, req.params.slug))) return res.status(404).json({ error: "ไม่พบโปรเจกต์" });
+  res.json(await restartApp(req.params.slug));
+});
+
 app.get("/api/projects/:slug/files", async (req, res) => {
   if (!isSlug(req.params.slug) || !(await canAccessProject(req.user, req.params.slug))) return res.status(404).end();
   res.json({ files: await loadProjectFiles(req.params.slug) });
@@ -443,6 +504,12 @@ app.get(/^\/p\/([^/]+)(?:\/(.*))?$/, async (req, res) => {
     return res.status(400).end();
   }
   if (!isSlug(slug)) return res.status(404).send("ไม่พบโปรเจกต์");
+  // Opened directly (this machine or the same Wi-Fi): send visitors to the live app on its own port.
+  const forwarded = req.headers["x-forwarded-for"] || req.headers["cf-connecting-ip"] || req.headers["forwarded"];
+  if (!forwarded && projectExists(slug)) {
+    const s = await ensureApp(slug).catch(() => null);
+    if (s?.running) return res.redirect(`${req.protocol}://${req.hostname}:${s.port}/${req.params[1] || ""}`);
+  }
   if (req.params[1] === undefined) return res.redirect(`/p/${encodeURIComponent(slug)}/`);
   const files = await loadProjectFiles(slug);
   const candidates = requested ? [requested, path.posix.join(requested, "index.html")] : ["index.html"];
@@ -533,6 +600,7 @@ async function shutdown(sig) {
   while (live.some((j) => !j.done) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   await Promise.all(live.map((j) => { j.flush?.(); return j.writes; })).catch(() => {});
   for (const j of live) await recordJob(j.slug, { id: j.id, status: "interrupted" }).catch(() => {});
+  await stopAll().catch(() => {});
   process.exit(0);
 }
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sig, () => shutdown(sig));
@@ -555,6 +623,7 @@ setInterval(async () => {
 app.listen(PORT, async () => {
   await markStaleJobs().catch(() => {});
   console.log(`\n  Agent Office is running at http://localhost:${PORT}`);
+  console.log(`  Owner sign-in (keep private): http://localhost:${PORT}/owner?token=${access.ownerToken}`);
   for (const b of shareBases()) console.log(`  Friends on your network:   ${b} (send them an invite link)`);
   console.log(`  Projects are saved in:     ${PROJECTS_DIR}`);
   const local = await localClaudeInfo();

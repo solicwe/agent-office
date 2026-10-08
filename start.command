@@ -19,6 +19,8 @@ fi
 [ -d node_modules ] || npm install --no-fund --no-audit || { read -r -p "ติดตั้งไม่สำเร็จ กด Enter เพื่อปิด"; exit 1; }
 [ -f .env ] || cp .env.example .env
 
-(sleep 3; open "http://localhost:${PORT}") &
+# Open the app signed in as the owner (the token is created on first start).
+(for i in $(seq 1 30); do [ -f data/owner-token.txt ] && break; sleep 0.5; done; sleep 1
+ open "http://localhost:${PORT}/owner?token=$(tr -d '\r\n' < data/owner-token.txt)") &
 echo "กำลังเปิด Agent Office ที่ http://localhost:${PORT}  (ปิดหน้าต่างนี้เพื่อหยุด)"
 npm start

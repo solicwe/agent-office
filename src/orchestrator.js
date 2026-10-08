@@ -4,6 +4,7 @@
 import { AGENTS, PROMPTS, systemPrompt } from "./agents.js";
 import { runProject, formatReport, isTestFile } from "./runner.js";
 import { parseFiles } from "./workspace.js";
+import { KIT_FILES, isLockedKitFile } from "./kit.js";
 
 const ENGINEERS = ["frontend", "backend"];
 const RETRIES = 1; // extra attempts per agent turn for transient failures
@@ -36,9 +37,18 @@ export async function runJob({ input, llm, emit, signal, settings = {} }) {
   const doc = (name, content, by) => emit({ type: "doc", name, content, by });
   const putFiles = (list, by) => {
     for (const f of list) {
+      if (/^data\//.test(f.path)) continue; // the live app's database is never written by agents
+      if (by !== "kit" && isLockedKitFile(f.path) && files[f.path] != null) continue; // keep the kit intact
       files[f.path] = f.content;
-      emit({ type: "file", path: f.path, content: f.content, by });
+      emit({ type: "file", path: f.path, content: f.content, by: by === "kit" ? "architect" : by });
     }
+  };
+  /** Give an app project the starter kit (server, database, accounts) if it lacks it. */
+  const addKit = () => {
+    const missing = Object.entries(KIT_FILES).filter(([p]) => files[p] == null).map(([path, content]) => ({ path, content }));
+    if (!missing.length) return;
+    putFiles(missing, "kit");
+    emit({ type: "notice", agent: "architect", message: `ใส่ชุดเริ่มต้นแอปจริง ${missing.length} ไฟล์: เว็บเซิร์ฟเวอร์ ฐานข้อมูล และระบบสมัครสมาชิก/login` });
   };
 
   /** One agent turn. Transient failures (network, stuck stream, overload) are retried once. */
@@ -188,6 +198,12 @@ export async function runJob({ input, llm, emit, signal, settings = {} }) {
     ctx.design = tag(d, "design");
     doc("design", ctx.design, "architect");
     tasks = parsePlan(tag(d, "plan"));
+    const kind = tag(d, "kind").trim().toLowerCase();
+    if (kind === "app" || (!kind && files["server.js"] != null)) {
+      addKit();
+      // The kit already provides these; don't let a task overwrite them.
+      for (const t of tasks) t.files = t.files.filter((f) => !isLockedKitFile(f) && f !== "public/js/api.js");
+    }
     move("architect", "meeting");
     for (const e of ENGINEERS) move(e, "meeting");
     say("architect", ENGINEERS, tag(d, "say"));

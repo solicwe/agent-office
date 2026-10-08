@@ -15,12 +15,15 @@ export function serverHasKey() {
 }
 
 const IDLE_MS = Number(process.env.LLM_IDLE_TIMEOUT_MS || 5 * 60 * 1000);
+// The SWU gateway sends the whole answer at the end instead of streaming it, so a
+// long answer looks silent: give it much longer before calling it stuck.
+const SWU_IDLE_MS = Number(process.env.SWU_IDLE_TIMEOUT_MS || 20 * 60 * 1000);
 
 /**
  * Run a streaming request, aborting it if nothing arrives for IDLE_MS so a stuck
  * connection can never freeze a job (the caller retries).
  */
-async function streamWithWatchdog(start, { signal, onText }) {
+async function streamWithWatchdog(start, { signal, onText, idleMs = IDLE_MS }) {
   const inner = new AbortController();
   const onOuterAbort = () => inner.abort();
   signal?.addEventListener("abort", onOuterAbort, { once: true });
@@ -28,7 +31,7 @@ async function streamWithWatchdog(start, { signal, onText }) {
   let timer;
   const bump = () => {
     clearTimeout(timer);
-    timer = setTimeout(() => { idle = true; inner.abort(); }, IDLE_MS);
+    timer = setTimeout(() => { idle = true; inner.abort(); }, idleMs);
   };
   bump();
   try {
@@ -37,7 +40,7 @@ async function streamWithWatchdog(start, { signal, onText }) {
     stream.on("text", (delta) => onText?.(delta));
     return await stream.finalMessage();
   } catch (err) {
-    if (idle) throw Object.assign(new Error(`ไม่มีการตอบกลับจาก AI นานเกิน ${Math.round(IDLE_MS / 60000)} นาที`), { transient: true });
+    if (idle) throw Object.assign(new Error(`ไม่มีการตอบกลับจาก AI นานเกิน ${Math.round(idleMs / 60000)} นาที`), { transient: true });
     throw err;
   } finally {
     clearTimeout(timer);
@@ -118,7 +121,7 @@ export class SwuLLM {
   // Gateway-compatible request: no beta features, effort or structured outputs.
   async call({ system, prompt, onText, signal }) {
     const params = { model: this.model, max_tokens: 32000, system, messages: [{ role: "user", content: prompt }] };
-    const msg = await streamWithWatchdog((s) => this.client.messages.stream(params, { signal: s }), { signal, onText });
+    const msg = await streamWithWatchdog((s) => this.client.messages.stream(params, { signal: s }), { signal, onText, idleMs: SWU_IDLE_MS });
     const text = msg.content.filter((b) => b.type === "text").map((b) => b.text).join("");
     if (!text) throw Object.assign(new Error(`SWU AI ไม่ได้ตอบข้อความกลับมา (stop_reason: ${msg.stop_reason})`), { transient: true });
     return { text, truncated: msg.stop_reason === "max_tokens", usage: { input: msg.usage?.input_tokens || 0, output: msg.usage?.output_tokens || 0 } };

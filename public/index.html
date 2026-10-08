@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=12">
+  <link rel="stylesheet" href="style.css?v=14">
   <script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
@@ -147,11 +147,13 @@
             </div>
             <span class="row-gap">
               <button id="reloadPreview" class="btn small ghost icon-only" disabled title="รีเฟรช" aria-label="รีเฟรช"><i data-icon="RotateCw"></i></button>
+              <button id="restartApp" class="btn small ghost" hidden title="ปิดแล้วเปิดเซิร์ฟเวอร์ของแอปใหม่"><i data-icon="Power"></i>รีสตาร์ทแอป</button>
               <button id="copyLink" class="btn small ghost" hidden><i data-icon="Copy"></i>คัดลอกลิงก์</button>
               <a id="openPreview" class="btn small" target="_blank" rel="noopener" hidden><i data-icon="ExternalLink"></i>เปิด</a>
             </span>
           </div>
-          <iframe id="previewFrame" class="preview" title="ตัวอย่างเว็บไซต์" sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe>
+          <pre id="appLog" class="code app-log" hidden></pre>
+          <iframe id="previewFrame" class="preview" title="ตัวอย่างเว็บไซต์" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-same-origin allow-downloads"></iframe>
         </div>
 
         <div class="panel" id="panel-live">
@@ -167,6 +169,11 @@
       <span class="mark"><i data-icon="Lock" data-size="20"></i></span>
       <h2>ต้องใช้ลิงก์เชิญ</h2>
       <p class="muted">หน้านี้เปิดได้เฉพาะเจ้าของเครื่อง หรือเพื่อนที่ได้รับลิงก์เชิญ ขอลิงก์จากเจ้าของแล้วเปิดลิงก์นั้นอีกครั้ง</p>
+      <form id="ownerForm" class="owner-form" hidden>
+        <p class="muted small">ถ้าคุณเป็นเจ้าของเครื่อง เปิดผ่าน start.bat / start.command ได้เลย หรือใส่รหัสเจ้าของจากไฟล์ data/owner-token.txt</p>
+        <div class="brief-input"><input id="ownerToken" type="password" placeholder="รหัสเจ้าของ" autocomplete="off"><button class="btn primary">เข้าสู่ระบบ</button></div>
+        <p class="small" id="ownerMsg"></p>
+      </form>
     </div>
   </div>
 
@@ -232,7 +239,7 @@
   <dialog id="brief" class="dialog wide">
     <form method="dialog" id="briefForm">
       <header class="dialog-head">
-        <h2><i data-icon="MessageCircleQuestion"></i>ช่วยคิดโจทย์กับ Nina</h2>
+        <h2><i data-icon="MessageCircleQuestion"></i><span id="briefTitle">ช่วยคิดโจทย์กับ Nina</span></h2>
         <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
       </header>
       <div id="briefLog" class="brief-log"></div>
@@ -304,8 +311,8 @@
     </form>
   </dialog>
 
-  <script src="icons.js?v=12"></script>
-  <script src="office.js?v=12"></script>
-  <script src="app.js?v=12"></script>
+  <script src="icons.js?v=14"></script>
+  <script src="office.js?v=14"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

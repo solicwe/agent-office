@@ -222,7 +222,7 @@
     briefLog(`<div class="thinking-row" id="briefThinking">${avatar("pm", 22)}<span class="dots"><i></i><i></i><i></i></span></div>`);
     let r;
     try {
-      r = await api("/api/brief", { idea: brief.idea, answers: brief.answers, finish, ...llmBody() });
+      r = await api("/api/brief", { idea: brief.idea, answers: brief.answers, finish, projectSlug: project?.slug, ...llmBody() });
     } catch (err) {
       r = { done: false, question: "", options: [], warning: err.message };
     }
@@ -250,6 +250,7 @@
     brief.idea = $("#task").value.trim();
     brief.answers = [];
     brief.current = null;
+    $("#briefTitle").textContent = project ? `ช่วยคิดว่าจะเพิ่มหรือแก้อะไรใน "${project.name}"` : "ช่วยคิดโจทย์กับ Nina";
     $("#briefLog").innerHTML = brief.idea
       ? `<div class="ba">${esc(brief.idea)}</div>`
       : "";
@@ -453,18 +454,43 @@
     const local = /^(localhost|127\.|\[::1\])/.test(location.hostname);
     return (local ? shareBase() : location.origin) + demoPath;
   }
-  function refreshPreview(force) {
+  // Each project runs as its own website on its own port. Through a tunnel (a domain
+  // name instead of an IP) only Agent Office's port is reachable, so fall back to /p/.
+  const directHost = () => /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:]+\])$/i.test(location.hostname);
+  let appState = null;
+  async function refreshPreview(force) {
     if (!project || !hasPage()) return;
-    const url = project.demoPath;
+    const slug = project.slug;
+    let url = project.demoPath, share = shareUrl(project.demoPath);
+    if (directHost()) {
+      $("#previewInfo").textContent = "กำลังเปิดแอป…";
+      try { appState = await api(`/api/projects/${encodeURIComponent(slug)}/app`); } catch { appState = null; }
+      if (project?.slug !== slug) return;
+      if (appState?.running) {
+        url = `${location.protocol}//${location.hostname}:${appState.port}/`;
+        share = `${new URL(shareBase()).protocol}//${new URL(shareBase()).hostname}:${appState.port}/`;
+      }
+    }
     $("#openPreview").href = url;
     $("#openDemoTop").href = url;
-    for (const id of ["#openPreview", "#copyLink", "#demoLink"]) $(id).hidden = false;
+    for (const id of ["#openPreview", "#copyLink", "#demoLink", "#restartApp"]) $(id).hidden = false;
     $("#reloadPreview").disabled = false;
-    $("#demoLink").textContent = shareUrl(url);
-    $("#previewInfo").textContent = "ลิงก์เดโม่สำหรับแชร์ (อัปเดตตามไฟล์ล่าสุดในโฟลเดอร์)";
-    if (force || $(".tab[data-tab=preview]").classList.contains("active")) $("#previewFrame").src = url + "?t=" + Date.now();
+    $("#demoLink").textContent = share;
+    const broken = directHost() && appState && !appState.running;
+    $("#previewInfo").textContent = broken
+      ? `แอปเปิดไม่ขึ้น: ${appState.error || appState.reason || "ไม่ทราบสาเหตุ"}`
+      : appState?.kind === "app" ? "แอปจริง (มีเซิร์ฟเวอร์และฐานข้อมูล) ลิงก์นี้ส่งให้คนในวง Wi-Fi เดียวกันลองได้" : "ลิงก์เดโม่สำหรับแชร์";
+    $("#appLog").hidden = !(broken && appState.logs);
+    $("#appLog").textContent = broken ? appState.logs || "" : "";
+    if (force || $(".tab[data-tab=preview]").classList.contains("active")) $("#previewFrame").src = url;
   }
   $("#reloadPreview").addEventListener("click", () => refreshPreview(true));
+  $("#restartApp").addEventListener("click", async () => {
+    if (!project) return;
+    $("#previewInfo").textContent = "กำลังรีสตาร์ทแอป…";
+    await api(`/api/projects/${encodeURIComponent(project.slug)}/app/restart`, {}).catch(() => {});
+    refreshPreview(true);
+  });
 
   async function copyText(text, btn) {
     try {
@@ -741,7 +767,10 @@
     office.fast = false;
     pumping = false;
   }
-  const wait = (ms) => (office.fast ? null : sleep(ms));
+  const wait = (ms) => (office.fast || document.hidden ? null : sleep(ms));
+  // Wait for characters to finish walking, but never stall the story: animations
+  // pause in a hidden tab, and replays must not wait at all.
+  const arrive = (ids) => (office.fast || document.hidden ? null : Promise.race([office.arrived(ids), sleep(4000)]));
 
   async function handle(e) {
     switch (e.type) {
@@ -785,7 +814,7 @@
       }
       case "say": {
         const to = e.to === "all" ? ORDER.filter((id) => id !== e.from) : e.to;
-        await office.arrived([e.from]);
+        await arrive([e.from]);
         office.say(e.from, e.text, nameList(e.to));
         office.react(to, "nod");
         chatMsg(e.from, e.to, e.text);
@@ -815,7 +844,7 @@
         previewTimer = setTimeout(() => refreshPreview(false), 1200);
         break;
       case "test": {
-        await office.arrived(["qa"]);
+        await arrive(["qa"]);
         rounds.push(e);
         renderTests();
         office.lab(e.ok ? "pass" : "fail", e);
@@ -829,7 +858,7 @@
         if (!office.fast) renderBudget(e);
         break;
       case "done":
-        await office.arrived(["pm"]);
+        await arrive(["pm"]);
         if (e.success) {
           if (!office.fast) office.confetti();
           office.react(ORDER, "jump");
@@ -959,7 +988,21 @@
   renderDocs();
   api("/api/config").then(async (cfg) => {
     config = cfg;
-    if (cfg.role === "none") { $("#locked").hidden = false; return; }
+    if (cfg.role === "none") {
+      $("#locked").hidden = false;
+      // On the owner's own computer: sign in with the owner token.
+      $("#ownerForm").hidden = !cfg.onThisMachine;
+      $("#ownerForm").addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        try {
+          await api("/api/owner-login", { token: $("#ownerToken").value.trim() });
+          location.reload();
+        } catch (err) {
+          $("#ownerMsg").textContent = err.message;
+        }
+      });
+      return;
+    }
     document.body.classList.toggle("guest", cfg.role === "guest");
     $("#shareBtn").hidden = cfg.role !== "owner";
     $("#guestChip").hidden = cfg.role !== "guest";

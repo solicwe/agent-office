@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -16,12 +17,22 @@ test("counts the tokens the provider reports", () => {
   assert.equal(usage.snapshot().exhausted, false);
 });
 
-test("out of tokens is flagged, and the next success means the provider reset", () => {
+test("a success right after 'out of tokens' only clears the flag (credit was low, not reset)", () => {
+  const before = usage.snapshot().used;
   usage.markExhausted();
   assert.equal(usage.snapshot().exhausted, true);
-  usage.addUsage(10, 5); // provider works again
+  usage.addUsage(10, 5);
   const s = usage.snapshot();
   assert.equal(s.exhausted, false);
+  assert.equal(s.used, before + 15, "keeps counting");
+});
+
+test("a success long after 'out of tokens' means the provider reset: counter restarts", () => {
+  usage.markExhausted();
+  writeFileSync(process.env.USAGE_FILE, JSON.stringify({ ...usage.snapshot(), exhaustedAt: new Date(Date.now() - 2 * 3600e3).toISOString() }));
+  usage.reload();
+  usage.addUsage(10, 5);
+  const s = usage.snapshot();
   assert.equal(s.used, 15, "counter restarted from zero");
   assert.equal(s.lastReset.reason, "upstream");
 });

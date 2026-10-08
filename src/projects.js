@@ -41,7 +41,7 @@ function projectPath(slug, rel = "") {
 }
 
 export async function writeProjectFile(slug, rel, content) {
-  if (/^\.agent-office(\.json)?(\/|$)/.test(safePath(rel))) throw new Error("reserved path");
+  if (/^(\.agent-office(\.json)?|data)(\/|$)/.test(safePath(rel))) throw new Error("reserved path");
   const abs = projectPath(slug, rel);
   await mkdir(path.dirname(abs), { recursive: true });
   await writeFile(abs, content, "utf8");
@@ -68,6 +68,8 @@ export async function loadProjectFiles(slug) {
     for (const ent of await readdir(dir, { withFileTypes: true })) {
       if (Object.keys(out).length >= MAX_FILES) return;
       if (ent.name === META || ent.name === HISTORY || ent.name === "node_modules" || ent.name.startsWith(".git")) continue;
+      // data/ holds the live app's database (accounts, password hashes): never in prompts, zips or the file tree.
+      if (!prefix && ent.name === "data") continue;
       const rel = prefix ? `${prefix}/${ent.name}` : ent.name;
       const abs = path.join(dir, ent.name);
       if (ent.isDirectory()) await walk(abs, rel);

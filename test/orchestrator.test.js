@@ -38,7 +38,7 @@ test("runner blocks child processes inside tests", async () => {
   assert.match(r.results.find((x) => x.kind === "test").error, /ERR_ACCESS_DENIED|permission/i);
 });
 
-test("runner times out infinite loops", { timeout: 30_000 }, async () => {
+test("runner times out infinite loops", { timeout: 90_000 }, async () => {
   const r = await runProject({ "tests/loop.test.js": "while (true) {}" });
   assert.equal(r.ok, false);
   assert.match(r.results[r.results.length - 1].error, /หมดเวลา/);

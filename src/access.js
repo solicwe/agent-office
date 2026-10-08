@@ -1,6 +1,6 @@
 // Who is calling: the owner (browsing on this machine) or a friend with an
 // invite link. Friends spend the owner's API tokens within a per-invite quota.
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
@@ -30,8 +30,34 @@ export function setServerKey(apiKey) {
   writeJson(KEYFILE, k ? { apiKey: k } : {});
 }
 
+// ---------- owner token ----------
+// Apps built by the team run on this machine and could call localhost:3000, so
+// "the request came from this computer" is not proof of the owner. The owner
+// instead holds a secret cookie; the token lives in data/owner-token.txt, which
+// the sandboxed apps cannot read.
+export const OWNER_COOKIE = "ao_owner";
+const OWNER_FILE = path.join(DATA, "owner-token.txt");
+export const ownerToken = (() => {
+  try {
+    const t = readFileSync(OWNER_FILE, "utf8").trim();
+    if (t.length >= 20) return t;
+  } catch { /* create below */ }
+  const t = randomBytes(24).toString("base64url");
+  mkdirSync(DATA, { recursive: true });
+  writeFileSync(OWNER_FILE, t + "\n");
+  return t;
+})();
+
+export function isOwnerToken(value) {
+  const a = Buffer.from(String(value || ""));
+  const b = Buffer.from(ownerToken);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 // ---------- identity ----------
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+export const isLoopback = (req) =>
+  LOOPBACK.has(req.socket.remoteAddress) && !(req.headers["x-forwarded-for"] || req.headers["cf-connecting-ip"] || req.headers["forwarded"]);
 
 function cookies(req) {
   const out = {};
@@ -42,14 +68,11 @@ function cookies(req) {
   return out;
 }
 
-/**
- * Owner = a request made directly on this machine. Requests relayed by a tunnel
- * or proxy carry forwarding headers, so they are never treated as the owner.
- */
+/** Owner = holds the owner cookie. Friends = hold a valid invite cookie. */
 export function identify(req) {
-  const forwarded = req.headers["x-forwarded-for"] || req.headers["cf-connecting-ip"] || req.headers["forwarded"];
-  if (LOOPBACK.has(req.socket.remoteAddress) && !forwarded) return { role: "owner", id: "owner", name: "เจ้าของเครื่อง" };
-  const code = cookies(req)[COOKIE];
+  const jar = cookies(req);
+  if (isOwnerToken(jar[OWNER_COOKIE])) return { role: "owner", id: "owner", name: "เจ้าของเครื่อง" };
+  const code = jar[COOKIE];
   const inv = code && invites.find((x) => x.code === code && !x.revoked);
   if (inv) return { role: "guest", id: `guest:${inv.code}`, name: inv.name, invite: inv };
   return { role: "none" };

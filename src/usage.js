@@ -30,9 +30,18 @@ function save() {
 
 export const snapshot = () => ({ ...state });
 
-/** Record a successful call. If we were out of tokens, the provider has reset: start over. */
+// A small request can still pass while credit is nearly gone, so a success soon after
+// "out of tokens" only clears the flag. Only a success after a long gap counts as the
+// provider having reset the quota, which restarts the counter.
+const RESET_GAP_MS = Number(process.env.QUOTA_RESET_GAP_MS || 30 * 60 * 1000);
+
+/** Record a successful call. */
 export function addUsage(input = 0, output = 0) {
-  if (state.exhausted) resetCount("upstream");
+  if (state.exhausted) {
+    const outFor = Date.now() - new Date(state.exhaustedAt || 0).getTime();
+    if (outFor >= RESET_GAP_MS) resetCount("upstream");
+    else { state.exhausted = false; state.exhaustedAt = null; }
+  }
   state.used += Math.max(0, input) + Math.max(0, output);
   save();
   return snapshot();
@@ -59,5 +68,10 @@ export function isQuotaError(err) {
   const msg = String(err?.message || err || "");
   if (status === 402) return true;
   if (status === 429 && !/quota|credit/i.test(msg)) return false; // a short rate limit, not an empty quota
-  return /quota|credit balance|insufficient (funds|credit|balance|quota)|out of (tokens|credits)|usage limit|exceeded your|token limit|โควตา/i.test(msg);
+  return /quota|credit balance|insufficient (funds|credit|balance|quota)|out of (tokens|credits)|usage limit|exceeded your|token limit|insufficient_credit|เครดิต|โควตา/i.test(msg);
+}
+
+/** Re-read the usage file (used by tests). */
+export function reload() {
+  state = load();
 }

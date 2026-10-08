@@ -17,7 +17,8 @@ if not exist node_modules (
 )
 if not exist .env copy .env.example .env >nul
 
-start "" cmd /c "timeout /t 3 >nul & start http://localhost:%PORT%"
+rem Open the app signed in as the owner (the token is created on first start).
+start "" cmd /c "timeout /t 4 >nul & for /f %%t in (data\owner-token.txt) do start http://localhost:%PORT%/owner?token=%%t"
 echo Agent Office: http://localhost:%PORT%   (close this window to stop)
 call npm start
 pause

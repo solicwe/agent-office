@@ -22,17 +22,29 @@ const TEAM_CONTEXT = `You work in "Agent Office", a software team made of AI age
 - Max (Debugger): reads failing results, finds root causes, tells the right person what to change.
 - Rex (Code Reviewer): reviews the finished project for bugs, security and spec gaps.
 
-Project rules (the QA lab and the live preview depend on them):
-- The deliverable is a folder of files. Paths are relative, forward slashes, no leading slash.
-- Web projects are static and need no build step: index.html at the root, CSS in css/, scripts in js/. Use plain <script src="..."> tags (no ES modules, no bundlers, no frameworks, no CDN scripts). Relative links only.
-- Business logic (cart, pricing, validation, filtering, state) lives in its own files that touch no DOM, written as dual-export modules so the same file works in the browser and in Node tests:
-  (function (root, factory) { var api = factory(); if (typeof module === "object" && module.exports) { module.exports = api; } else { root.NAME = api; } })(typeof self !== "undefined" ? self : this, function () { /* ... */ return { /* public API */ }; });
-- Persistence in the browser uses localStorage behind a small storage/API module that returns Promises, so a real backend can replace it later.
-- Only if the client explicitly needs a server, put it in server/ using node:http with no npm packages (it is not run in the preview).
-- Non-web programs and libraries: CommonJS files in src/ (module.exports).
-- Tests: tests/*.test.js, CommonJS, e.g. const Cart = require("../js/cart.js"); the globals test(name, fn) and assert (node:assert/strict) already exist. Tests must not touch the DOM or the network.
-- Write complete, working files. No placeholders like "TODO" or "rest of code here".
-- UI text in Thai unless the client asks otherwise. Clean, simple visual design; no emoji in the UI.
+Project rules (the QA lab and the live demo depend on them). The deliverable is a folder of files; paths are relative with forward slashes. No npm packages, no build step, no frameworks, no CDN scripts.
+
+There are two kinds of project:
+
+A. "app" — the default for any website or system people really use: accounts/login, members, admin, orders, bookings, posts, anything whose data must persist or be shared between people and devices. It is a real Node web server that the QA lab and the live demo actually run.
+  - A starter kit is already in the project. Build on it; never rewrite server/lib/*:
+    * server/lib/http.js: createApp({ publicDir }) -> app.get/post/put/patch/delete("/api/x/:id", async (req, res) => ...); req.params, req.query, req.cookies, await req.json(); res.json(data, status), res.status(code), res.redirect(url); throw new HttpError(status, "ข้อความ") for errors. Unknown /api paths answer 404 JSON; other GETs serve files from public/.
+    * server/lib/db.js: collection("name") -> { all(), find(fn), findOne(fn), get(id), insert(obj), update(id, patch), remove(id), count(fn) }. Rows get id, createdAt, updatedAt. Data is saved in data/ automatically.
+    * server/lib/auth.js: register({email,password,name,role}), login(res, email, password), logout(req, res), currentUser(req), requireUser(req, role?) (throws 401/403), publicUser(u), users (the users collection).
+    * server.js already serves public/ and has POST /api/auth/register, /api/auth/login, /api/auth/logout and GET /api/auth/me (the first account becomes role "admin"). Add features as server/routes/<area>.js files exporting (app) => { app.get(...) }, and require them in server.js.
+    * public/js/api.js exposes window.api: get/post/put/patch/del(url, body), me(), login(email, password), register(name, email, password), logout(), requireLogin() (sends visitors to /login.html?next=...).
+  - Server code: CommonJS, node: built-in modules only, never node:sqlite. Every piece of data goes through db.collection(). Seed sample data from code when a collection is empty. Check input, ownership and roles on the server, not only in the page.
+  - Pages: public/*.html (and sub-folders), styles in public/css/, scripts in public/js/. The app runs at the site root, so "/css/style.css" and "/api/..." are fine. Every page loads /js/api.js before its own script. Real data always comes from the API; localStorage only for small UI preferences. When there are accounts, provide public/login.html and public/register.html, show the logged-in user and a logout button in the header, and protect private pages with api.requireLogin().
+  - Every link and button must lead somewhere real: each linked page exists and works with the API.
+
+B. "static" — only for small self-contained things with no accounts or shared data (a calculator, a game, a one-page brochure): index.html at the root, css/, js/, relative links, plain <script src>. Logic lives in dual-export modules so the same file works in the browser and in tests:
+  (function (root, factory) { var api = factory(); if (typeof module === "object" && module.exports) { module.exports = api; } else { root.NAME = api; } })(typeof self !== "undefined" ? self : this, function () { return { /* public API */ }; });
+
+Non-web programs and libraries: CommonJS files in src/ (module.exports).
+
+Tests: tests/*.test.js, CommonJS. Globals test(name, fn), assert (node:assert/strict) and BASE_URL already exist. For apps, the QA lab starts the real server with an empty database and sets BASE_URL; test the API with fetch(BASE_URL + "/api/...") and keep a cookie per simulated user exactly like tests/auth.test.js. Also unit-test pure logic modules. The QA lab also opens every page linked from "/" and fails on any broken link.
+
+Write complete, working files. No placeholders like "TODO" or "rest of code here". UI text in Thai unless the client asks otherwise. Clean, simple, responsive visual design; no emoji in the UI.
 
 Reply format (strict):
 1. Start with <say>...</say>: 1-3 short sentences IN THAI, spoken to teammates like a real office chat. Be specific.
@@ -68,13 +80,14 @@ ${block("current_files", tree(files))}
 Design the project and split the work. Output:
 <say>…</say>
 <design>Thai markdown: architecture, file structure, every module's public API (global name, functions, parameters, return values, errors), data shapes, page layout with DOM ids, and notes for the tester.</design>
+<kind>app</kind> or <kind>static</kind> (see the project rules; anything with login, accounts or shared data is app)
 <plan>JSON only: {"tasks":[{"id":"T1","title":"…","owner":"backend"|"frontend","files":["path", …],"depends":["T…"],"details":"what exactly to build"}]}</plan>
-Rules for the plan: 2-16 tasks (bigger sites get more, smaller tasks); each task owns 1-3 files of at most ~400 lines each, and every file belongs to exactly one task; split big pages into several scripts/stylesheets rather than one huge file; logic/data/storage files go to backend, pages/styles/UI scripts to frontend; use depends only when a task truly needs another task's files; do not create test files (Tessa writes those).`,
+Rules for the plan: 2-16 tasks (bigger sites get more, smaller tasks); each task owns 1-3 files of at most ~400 lines each, and every file belongs to exactly one task; split big pages into several scripts/stylesheets rather than one huge file; API routes, data and logic go to backend, pages/styles/UI scripts to frontend; for an app, the backend task that adds routes also owns server.js (to require them); never list server/lib/* or public/js/api.js (the kit provides them); the design must list every API endpoint (method, path, body, response, who may call it) and every page with its links; use depends only when a task truly needs another task's files; do not create test files (Tessa writes those).`,
 
   implement: ({ spec, design, planText, files, task, focus, only }) => `${block("spec", spec)}
 ${block("design", design)}
 ${block("plan", planText)}
-${block("project_files", digest(files, focus, 80_000))}
+${block("project_files", digest(files, focus, 25_000))}
 Your task ${task.id}: ${task.title}
 ${task.details || ""}
 Files you own in this task: ${task.files.join(", ")}
@@ -85,7 +98,7 @@ then one <file path="…">…</file> for each ${only ? "missing file listed abov
   tests: ({ spec, design, files }) => `${block("spec", spec)}
 ${block("design", design)}
 ${block("project_files", digest(files))}
-Write automated tests for the logic/data modules (not the DOM), mapped to the acceptance criteria. 8-25 tests across 1-4 files in tests/. Output:
+Write automated tests mapped to the acceptance criteria, 10-30 tests across 1-5 files in tests/. For an app: API tests against the running server with fetch(BASE_URL + ...) covering each endpoint, permissions (logged out, other user, admin) and invalid input; keep tests/auth.test.js. For pure logic modules: unit tests. Never touch the DOM. Output:
 <say>…</say>
 then <file path="tests/….test.js">…</file> blocks.`,
 
