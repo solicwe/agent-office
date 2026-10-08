@@ -3,12 +3,31 @@
 // website (own cookies, real logins) and can never act as Agent Office.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { Resolver } from "node:dns/promises";
 import path from "node:path";
 
 const IS_WIN = process.platform === "win32";
 const URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 const MAX_APP_TUNNELS = Number(process.env.MAX_APP_TUNNELS || 5);
-const tunnels = new Map(); // key ("main" or a project slug) -> { port, url, child, starting, error }
+const READY_WAIT_MS = Number(process.env.TUNNEL_READY_WAIT_MS || 25_000);
+const tunnels = new Map(); // key ("main" or a project slug) -> { port, url, ready, child, starting, error }
+
+/**
+ * A new trycloudflare.com name is not reachable the moment cloudflared prints it.
+ * Wait until Cloudflare's own resolvers know it, so a friend who opens the link at
+ * once does not get "site not found" (which their computer may then remember for minutes).
+ */
+async function nameIsLive(url, until) {
+  if (process.env.TUNNEL_DNS_CHECK === "0") return true;
+  const r = new Resolver({ timeout: 3000, tries: 1 });
+  r.setServers(["1.1.1.1", "8.8.8.8"]);
+  const host = new URL(url).hostname;
+  while (Date.now() < until) {
+    try { if ((await r.resolve4(host)).length) return true; } catch { /* not yet */ }
+    await new Promise((s) => setTimeout(s, 1000));
+  }
+  return false;
+}
 
 export function findCloudflared() {
   if (process.env.CLOUDFLARED_BIN) return existsSync(process.env.CLOUDFLARED_BIN) ? process.env.CLOUDFLARED_BIN : null;
@@ -29,10 +48,10 @@ export const INSTALL_HINT = IS_WIN
 export function tunnelStatus(key) {
   const t = tunnels.get(key);
   if (!t) return { on: false };
-  return { on: true, url: t.url || null, starting: Boolean(t.starting), error: t.error || null, port: t.port };
+  return { on: true, url: (t.ready && t.url) || null, starting: Boolean(t.starting), error: t.error || null, port: t.port };
 }
 
-/** Start (or reuse) a quick tunnel to localhost:port. Resolves when the public URL is known. */
+/** Start (or reuse) a quick tunnel to localhost:port. Resolves when the public URL can be opened. */
 export function startTunnel(key, port) {
   const current = tunnels.get(key);
   if (current && current.port === port && current.child?.exitCode === null && !current.error) {
@@ -45,7 +64,7 @@ export function startTunnel(key, port) {
   const bin = findCloudflared();
   if (!bin) return Promise.resolve({ on: false, error: INSTALL_HINT, missing: true });
 
-  const t = { port, url: null, child: null, error: null, log: "" };
+  const t = { port, url: null, ready: false, child: null, error: null, log: "" };
   tunnels.set(key, t);
   t.starting = new Promise((resolve) => {
     const args = ["tunnel", "--no-autoupdate", "--url", `http://localhost:${port}`];
@@ -53,10 +72,21 @@ export function startTunnel(key, port) {
     const child = /\.m?js$/.test(bin) ? spawn(process.execPath, [bin, ...args], { windowsHide: true }) : spawn(bin, args, { windowsHide: true, env: process.env });
     t.child = child;
     const done = () => { if (t.starting) { t.starting = null; resolve(tunnelStatus(key)); } };
+    let connected = false;
+    let onConnected = () => {};
+    const whenReady = async () => {
+      const until = Date.now() + READY_WAIT_MS;
+      // cloudflared prints the name first and connects to Cloudflare a moment later.
+      if (!connected) await new Promise((r) => { onConnected = r; setTimeout(r, Math.max(0, until - Date.now())).unref?.(); });
+      await nameIsLive(t.url, until);
+      if (!t.error) t.ready = true; // after the wait, hand the link out anyway: it works soon
+      done();
+    };
     const onData = (d) => {
       t.log = (t.log + d).slice(-4000);
+      if (/Registered tunnel connection/i.test(String(d))) { connected = true; onConnected(); }
       const m = String(d).match(URL_RE);
-      if (m && !t.url) { t.url = m[0]; done(); }
+      if (m && !t.url) { t.url = m[0]; whenReady(); }
     };
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
@@ -82,4 +112,4 @@ export function stopAllTunnels() {
 }
 
 /** The public base URL of Agent Office itself, when its tunnel is up. */
-export const mainPublicUrl = () => tunnels.get("main")?.url || null;
+export const mainPublicUrl = () => tunnelStatus("main").url;

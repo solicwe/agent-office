@@ -26,7 +26,7 @@ before(async () => {
     env: {
       ...process.env, PORT: String(PORT), PROJECTS_DIR: path.join(dir, "projects"), DATA_DIR: path.join(dir, "data"), USAGE_FILE: path.join(dir, "data", "usage.json"),
       ANTHROPIC_API_KEY: "", SWU_API_KEY: "", APP_PORT_BASE: "7100", CLAUDE_CODE_BIN: path.join(dir, "missing"),
-      CLOUDFLARED_BIN: path.join(here, "fixtures", "fake-cloudflared.js"), PUBLIC_URL: "", PUBLIC_TUNNEL: "",
+      CLOUDFLARED_BIN: path.join(here, "fixtures", "fake-cloudflared.js"), PUBLIC_URL: "", PUBLIC_TUNNEL: "", TUNNEL_DNS_CHECK: "0",
     },
     stdio: "pipe",
   });
