@@ -109,11 +109,19 @@ body { font-family: "IBM Plex Sans Thai", system-ui, sans-serif; font-size: 14.5
 .usage-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 38px; }
 
 body.guest .owner-only { display: none !important; }
-.locked { position: fixed; inset: 0; background: var(--bg); z-index: 100; display: grid; place-items: center; padding: 16px; }
+body:not(.guest) .guest-only { display: none !important; }
+.own-key { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.own-key h3 { margin: 0; }
+#ownKeyFields { display: flex; flex-direction: column; gap: 8px; }
+.rounds-list { margin: 6px 0 0; padding-left: 18px; }
+.locked { position: fixed; inset: 0; background: var(--bg); z-index: 5000; display: grid; place-items: center; padding: 16px; }
 .locked-card { max-width: 420px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .locked-card h2 { margin: 6px 0 0; font-size: 20px; }
 .share-sec { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
 .share-sec code { font-size: 11.5px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; user-select: all; }
+.tunnel-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tunnel-row p { margin: 0; flex: 1 1 220px; }
+.share-sec label { display: flex; flex-direction: column; gap: 4px; }
 .invite { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
 .invite .link-box { grid-column: 1 / -1; }
 .invite small { color: var(--muted); }
@@ -189,7 +197,7 @@ textarea:focus, input:focus, select:focus { outline: 2px solid color-mix(in srgb
 .office-col { min-width: 0; }
 
 /* ---------- scene ---------- */
-.scene { position: relative; width: 100%; aspect-ratio: 1000 / 600; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); background: var(--floor); container-type: inline-size; }
+.scene { position: relative; isolation: isolate; width: 100%; aspect-ratio: 1000 / 600; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); background: var(--floor); container-type: inline-size; }
 .scene .bg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .zone-label { font: 600 12px "IBM Plex Sans Thai", sans-serif; fill: var(--muted); letter-spacing: 1.5px; }
 .furn { position: absolute; }
@@ -384,8 +392,9 @@ textarea:focus, input:focus, select:focus { outline: 2px solid color-mix(in srgb
 .name-field input:focus { outline: none; }
 .name-field:focus-within { border-color: var(--accent); }
 .path { overflow-wrap: anywhere; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; }
-.share-bar { align-items: flex-start; }
-.share { min-width: 0; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.share-bar { align-items: flex-start; flex-wrap: wrap; }
+.share-bar > .row-gap { flex-wrap: wrap; justify-content: flex-end; }
+.share { min-width: min(260px, 100%); display: flex; flex-direction: column; gap: 4px; flex: 1 1 260px; }
 .link-box { display: block; font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; overflow-wrap: anywhere; user-select: all; }
 .dialog.wide { width: min(720px, calc(100vw - 32px)); }
 .project-list { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; }

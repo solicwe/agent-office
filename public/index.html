@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=14">
+  <link rel="stylesheet" href="style.css?v=16">
   <script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
@@ -148,6 +148,7 @@
             <span class="row-gap">
               <button id="reloadPreview" class="btn small ghost icon-only" disabled title="รีเฟรช" aria-label="รีเฟรช"><i data-icon="RotateCw"></i></button>
               <button id="restartApp" class="btn small ghost" hidden title="ปิดแล้วเปิดเซิร์ฟเวอร์ของแอปใหม่"><i data-icon="Power"></i>รีสตาร์ทแอป</button>
+              <button id="appTunnel" class="btn small ghost" hidden title="ให้แอปนี้มีลิงก์ https ของตัวเอง คนนอกบ้านเปิดและ login ได้"><i data-icon="Globe"></i><span>แชร์แอปนี้ออกนอกบ้าน</span></button>
               <button id="copyLink" class="btn small ghost" hidden><i data-icon="Copy"></i>คัดลอกลิงก์</button>
               <a id="openPreview" class="btn small" target="_blank" rel="noopener" hidden><i data-icon="ExternalLink"></i>เปิด</a>
             </span>
@@ -197,8 +198,12 @@
 
       <section class="share-sec">
         <h3 class="section-title">2. ที่อยู่ที่เพื่อนเปิดได้</h3>
-        <input id="shareBase" placeholder="http://192.168.x.x:3000">
-        <p class="muted small">ค่าเริ่มต้นคือที่อยู่ในวง Wi-Fi เดียวกัน ถ้าเพื่อนอยู่นอกบ้าน ให้รัน <code>npx cloudflared tunnel --url http://localhost:3000</code> แล้วนำลิงก์ https ที่ได้มาใส่ช่องนี้</p>
+        <div class="tunnel-row">
+          <p class="muted small" id="tunnelState">เพื่อนในวง Wi-Fi เดียวกันเปิดได้เลย ถ้าเพื่อนอยู่นอกบ้าน กดปุ่มนี้</p>
+          <button type="button" id="tunnelToggle" class="btn"><i data-icon="Globe"></i><span>เปิดให้คนนอกบ้านเข้า</span></button>
+        </div>
+        <p class="muted small" id="tunnelHint" hidden></p>
+        <label class="muted small">ที่อยู่ในลิงก์เชิญ<input id="shareBase" placeholder="http://192.168.x.x:3000"></label>
       </section>
 
       <section class="share-sec">
@@ -302,8 +307,25 @@
         <label class="check"><input type="checkbox" id="setRemember"> จำ API key ไว้ในเบราว์เซอร์นี้</label>
         <p class="muted small" id="keyNote"></p>
       </div>
+      <div class="guest-only own-key">
+        <h3 class="section-title">API key ของคุณเอง (ไม่บังคับ)</h3>
+        <p class="muted small">ทีมใช้โทเค็นของเจ้าของเครื่องก่อน เมื่อหมดหรือโควตาที่ได้รับหมด จะสลับมาใช้ key ของคุณแล้วทำงานต่อทันที ในโปรเจกต์เดิม key ของคุณเก็บในเบราว์เซอร์นี้ และส่งไปที่เซิร์ฟเวอร์เฉพาะตอนสั่งงาน ไม่ถูกบันทึกหรือแชร์ให้ใคร</p>
+        <label>ชนิดของ key
+          <select id="setOwnKind">
+            <option value="">ไม่ใช้ key ของฉัน</option>
+            <option value="swu">SWU AI (มศว) API key</option>
+            <option value="api">Anthropic API key</option>
+          </select>
+        </label>
+        <div id="ownKeyFields">
+          <label>Key<input id="setOwnKey" type="password" autocomplete="off" placeholder="วาง API key ของคุณ"></label>
+          <label class="check"><input type="checkbox" id="setOwnRemember" checked> จำ key ไว้ในเบราว์เซอร์นี้</label>
+          <label class="check"><input type="checkbox" id="setOwnFirst"> ใช้ key ของฉันตั้งแต่แรก (ไม่ใช้โทเค็นของเจ้าของ)</label>
+        </div>
+      </div>
       <label class="owner-only">โทเค็นที่ใช้ไปแล้ว<span class="usage-row"><span id="usedText" class="muted small"></span><button type="button" id="resetUsage" class="btn small ghost"><i data-icon="RotateCcw"></i>รีเซ็ต</button></span></label>
-      <p class="muted small owner-only">นับจากจำนวนจริงที่ AI ส่งกลับมาทุกครั้ง ถ้าต้นทางแจ้งว่าโทเค็นหมดจะขึ้นว่า "โทเค็นหมด" และเมื่อต้นทางรีเซ็ตโควตาแล้ว ตัวนับจะเริ่มใหม่จาก 0 ให้เอง</p>
+      <div class="muted small owner-only" id="roundsText"></div>
+      <p class="muted small owner-only">นับจากจำนวนจริงที่ AI ส่งกลับมาทุกครั้ง ถ้าต้นทางแจ้งว่าโทเค็นหมดจะขึ้นว่า "โทเค็นหมด" และเมื่อต้นทางรีเซ็ตโควตาแล้ว ตัวนับจะเริ่มใหม่จาก 0 ให้เอง พร้อมจำไว้ว่ารอบที่แล้วใช้ได้กี่ token</p>
       <footer class="dialog-foot">
         <button value="cancel" class="btn ghost">ยกเลิก</button>
         <button value="save" id="saveSettings" class="btn primary">บันทึก</button>
@@ -311,8 +333,8 @@
     </form>
   </dialog>
 
-  <script src="icons.js?v=14"></script>
-  <script src="office.js?v=14"></script>
-  <script src="app.js?v=14"></script>
+  <script src="icons.js?v=16"></script>
+  <script src="office.js?v=16"></script>
+  <script src="app.js?v=16"></script>
 </body>
 </html>

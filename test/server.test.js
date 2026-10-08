@@ -17,7 +17,7 @@ before(async () => {
   await writeFile(path.join(dir, "projects", "owner-shop", ".agent-office.json"), JSON.stringify({ slug: "owner-shop", name: "owner-shop", owner: "owner" }));
   await writeFile(path.join(dir, "projects", "owner-shop", "index.html"), "<h1>hi</h1>");
   server = spawn(process.execPath, ["server.js"], {
-    env: { ...process.env, PORT: String(PORT), PROJECTS_DIR: path.join(dir, "projects"), DATA_DIR: path.join(dir, "data"), USAGE_FILE: path.join(dir, "data", "usage.json"), ANTHROPIC_API_KEY: "", SWU_API_KEY: "", APP_PORT_BASE: "5100", CLAUDE_CODE_BIN: path.join(dir, "missing") },
+    env: { ...process.env, PORT: String(PORT), PROJECTS_DIR: path.join(dir, "projects"), DATA_DIR: path.join(dir, "data"), USAGE_FILE: path.join(dir, "data", "usage.json"), ANTHROPIC_API_KEY: "", SWU_API_KEY: "", APP_PORT_BASE: "5100", CLAUDE_CODE_BIN: path.join(dir, "missing"), CLOUDFLARED_BIN: path.join(dir, "missing-cloudflared"), PUBLIC_URL: "", PUBLIC_TUNNEL: "" },
     stdio: "pipe",
   });
   for (let i = 0; i < 50; i++) {

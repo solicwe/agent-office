@@ -11,6 +11,8 @@ import * as usage from "./src/usage.js";
 import * as access from "./src/access.js";
 import { ensureApp, restartApp, stopApp, stopAll } from "./src/apprunner.js";
 import { startupProblems } from "./src/doctor.js";
+import * as tunnel from "./src/tunnel.js";
+import { FallbackLLM } from "./src/fallback.js";
 import { safePath, zip } from "./src/workspace.js";
 import { PROJECTS_DIR, createProject, writeProjectFile, readMeta, loadProjectFiles, listProjects, isSlug, projectExists, appendJobEvents, readJobEvents, recordJob, deleteProject, setMember, canAccess, isProjectOwner } from "./src/projects.js";
 import { offlineStep, BRIEF_SCHEMA, BRIEF_SYSTEM, briefPrompt } from "./src/brief.js";
@@ -38,10 +40,10 @@ app.use(express.static(path.join(here, "public")));
 const jobs = new Map();
 const running = () => [...jobs.values()].filter((j) => !j.done).length;
 
-/** Addresses other people can open: PUBLIC_URL (e.g. a tunnel) or this machine's LAN address. */
+/** Addresses other people can open: PUBLIC_URL, the outside-link tunnel, then this machine's LAN address. */
 function shareBases() {
   if (PUBLIC_URL) return [PUBLIC_URL];
-  const out = [];
+  const out = tunnel.mainPublicUrl() ? [tunnel.mainPublicUrl()] : [];
   for (const list of Object.values(networkInterfaces())) {
     for (const a of list || []) if (a.family === "IPv4" && !a.internal) out.push(`http://${a.address}:${PORT}`);
   }
@@ -99,7 +101,10 @@ const ownerOnly = (req, res, next) => (req.user.role === "owner" ? next() : res.
  */
 function budgetFor(user) {
   const g = usage.snapshot();
-  if (user.role !== "guest") return { used: g.used, exhausted: g.exhausted, since: g.since, lastReset: g.lastReset };
+  if (user.role !== "guest") {
+    const learned = { roundLimit: g.roundLimit, periodMs: g.periodMs, nextResetAt: g.nextResetAt, roundsSeen: g.roundsSeen };
+    return { used: g.used, exhausted: g.exhausted, since: g.since, lastReset: g.lastReset, ...learned, ...(user.role === "owner" ? { rounds: g.rounds } : {}) };
+  }
   const inv = user.invite;
   return { used: inv.used, limit: inv.limit, exhausted: g.exhausted || access.inviteRemaining(inv) <= 0, since: inv.createdAt };
 }
@@ -154,7 +159,7 @@ app.get("/api/config", async (req, res) => {
 });
 
 app.get("/api/usage", (req, res) => res.json(budgetFor(req.user)));
-app.post("/api/usage/reset", ownerOnly, (req, res) => res.json(usage.resetCount("manual")));
+app.post("/api/usage/reset", ownerOnly, (req, res) => { usage.resetCount("manual"); res.json(budgetFor(req.user)); });
 
 app.get("/api/invites", ownerOnly, (_req, res) => res.json({ invites: access.listInvites(), shareBases: shareBases(), serverHasKey: hasFriendKey() }));
 app.post("/api/invites", ownerOnly, (req, res) => res.json(access.createInvite(req.body || {})));
@@ -168,19 +173,70 @@ app.post("/api/swu/models", ownerOnly, async (req, res) => {
 });
 app.post("/api/server-key", ownerOnly, (req, res) => { access.setServerKey(req.body?.apiKey); res.json({ serverHasKey: serverHasKey() }); });
 
+// ---------- outside link (Cloudflare quick tunnel) ----------
+/** True when the request came in through a tunnel or proxy rather than straight to this machine. */
+const viaTunnel = (req) => Boolean(req.headers["x-forwarded-for"] || req.headers["cf-connecting-ip"] || req.headers["forwarded"]);
+const tunnelInfo = () => ({ main: tunnel.tunnelStatus("main"), available: Boolean(tunnel.findCloudflared()), hint: tunnel.INSTALL_HINT, fixed: PUBLIC_URL || null, shareBases: shareBases() });
+app.get("/api/tunnel", ownerOnly, (_req, res) => res.json(tunnelInfo()));
+app.post("/api/tunnel", ownerOnly, async (req, res) => {
+  if (req.body?.on === false) {
+    tunnel.stopTunnel("main");
+    return res.json(tunnelInfo());
+  }
+  const r = await tunnel.startTunnel("main", PORT);
+  res.status(r.url ? 200 : 502).json({ ...tunnelInfo(), error: r.url ? null : r.error });
+});
+
+/** The app's own public https link (its own tunnel), started on demand. */
+async function appPublicUrl(slug, state, start) {
+  if (!state?.running) return null;
+  const t = tunnel.tunnelStatus(slug);
+  if (t.url && t.port === state.port && !t.error) return t.url;
+  if (!start) return null;
+  const r = await tunnel.startTunnel(slug, state.port);
+  return r.url || null;
+}
+
 /**
  * How to reach Claude. The owner may use the Claude Code login on this machine
- * ("local") or an API key. Friends always go through the owner's server API key:
- * a personal Claude login is for its owner only and must not be shared.
+ * ("local") or an API key. Friends go through the owner's server key (a personal
+ * Claude login is for its owner only and must not be shared), and may add their
+ * own key, which takes over when the owner's tokens or their share run out.
+ * Returns an LLM whose quota errors are already flagged.
  */
 async function makeLLM(body, user) {
   const s = body.settings || {};
   if (user.role === "guest") {
-    // Friends use the owner's team API on the server: SWU AI first, else the Anthropic key.
-    if (process.env.SWU_API_KEY) return new SwuLLM({ token: process.env.SWU_API_KEY });
-    if (!serverHasKey()) throw httpError(400, "เจ้าของเครื่องยังไม่ได้ตั้ง API key สำหรับเพื่อน");
-    return new ClaudeLLM({ model: s.model, effort: s.effort });
+    const own = ownLLM(body);
+    const ownFirst = Boolean(own && body.ownFirst);
+    // The owner's team API on the server: SWU AI first, else the Anthropic key.
+    const server = ownFirst ? null
+      : process.env.SWU_API_KEY ? new SwuLLM({ token: process.env.SWU_API_KEY })
+      : serverHasKey() ? new ClaudeLLM({ model: s.model, effort: s.effort }) : null;
+    if (!server && !own) throw httpError(400, "เจ้าของเครื่องยังไม่ได้ตั้ง API key สำหรับเพื่อน ใส่ API key ของคุณเองในหน้าตั้งค่าแทนได้");
+    if (!own && isOut(user)) throw httpError(402, "โควตาโทเค็นที่เจ้าของให้หมดแล้ว ใส่ API key ของคุณเองในหน้าตั้งค่า แล้วทำต่อได้เลย");
+    return new FallbackLLM({
+      primary: server && !isOut(user) ? watchQuota(server) : null,
+      fallback: own,
+      primaryOut: () => isOut(user),
+      isQuota: (err) => Boolean(err?.quota) || usage.isQuotaError(err),
+    });
   }
+  return watchQuota(await ownerLLM(body, s));
+}
+
+/** A friend's own key from their settings: { kind: "swu" | "api", key, model }. */
+function ownLLM(body) {
+  const o = body.ownKey && typeof body.ownKey === "object" ? body.ownKey : null;
+  const key = typeof o?.key === "string" ? o.key.trim() : "";
+  if (!key || key.length > 500) return null;
+  const s = body.settings || {};
+  if (o.kind === "swu") return new SwuLLM({ token: key, model: typeof o.model === "string" && o.model.trim() ? o.model.trim() : process.env.SWU_MODEL || undefined });
+  if (o.kind === "api") return new ClaudeLLM({ apiKey: key, model: s.model, effort: s.effort });
+  return null;
+}
+
+async function ownerLLM(body, s) {
   if (s.provider === "swu") {
     const token = (typeof body.swuKey === "string" && body.swuKey.trim()) || process.env.SWU_API_KEY || "";
     if (!token) throw httpError(400, "ยังไม่ได้ใส่ SWU API key ในหน้าตั้งค่า");
@@ -210,11 +266,11 @@ app.post("/api/brief", async (req, res) => {
   // Inside a project the interview is about changing that project, not starting over.
   const project = body.projectSlug && projectExists(body.projectSlug) && (await canAccessProject(req.user, body.projectSlug))
     ? await projectContext(body.projectSlug) : null;
-  if (isOut(req.user)) return res.json({ ...offlineStep(idea, answers, finish, project), mode: "offline", warning: "โควตาโทเค็นของคุณหมดแล้ว" });
+  if (isOut(req.user) && !ownLLM(body)) return res.json({ ...offlineStep(idea, answers, finish, project), mode: "offline", warning: "โควตาโทเค็นของคุณหมดแล้ว" });
   try {
-    const llm = watchQuota(await makeLLM(body, req.user));
+    const llm = await makeLLM(body, req.user);
     const { data, usage: u } = await llm.json({ system: BRIEF_SYSTEM, prompt: briefPrompt(idea, answers, finish, project), schema: BRIEF_SCHEMA });
-    res.json({ ...data, options: (data.options || []).slice(0, 8), mode: "claude", followUp: Boolean(project), usage: charge(req.user, u.input, u.output) });
+    res.json({ ...data, options: (data.options || []).slice(0, 8), mode: "claude", followUp: Boolean(project), usage: u.own ? budgetFor(req.user) : charge(req.user, u.input, u.output) });
   } catch (err) {
     console.error("[brief]", err.message);
     res.json({ ...offlineStep(idea, answers, finish, project), mode: "offline", followUp: Boolean(project), warning: describeError(err) });
@@ -263,10 +319,9 @@ app.post("/api/jobs", async (req, res) => {
   if (!task) return res.status(400).json({ error: "กรุณาใส่รายละเอียดงาน" });
   if (running() >= MAX_RUNNING) return res.status(429).json({ error: "มีงานกำลังทำอยู่เต็มแล้ว ลองใหม่อีกครั้งเมื่องานเดิมเสร็จ" });
   if (existingSlug && runningJobFor(existingSlug)) return res.status(409).json({ error: "โปรเจกต์นี้มีงานกำลังทำอยู่ รอให้เสร็จก่อน" });
-  if (isOut(user)) return res.status(402).json({ error: "โควตาโทเค็นของคุณหมดแล้ว ขอเพิ่มจากเจ้าของเครื่อง" });
   let llm;
   try {
-    llm = watchQuota(await makeLLM(body, user));
+    llm = await makeLLM(body, user);
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message });
   }
@@ -317,17 +372,26 @@ app.post("/api/jobs", async (req, res) => {
     job.events.push(e);
     const chunk = `id: ${job.events.length - 1}\ndata: ${JSON.stringify(e)}\n\n`;
     for (const c of job.clients) c.write(chunk);
-    // Count tokens; a friend's job stops when their quota is used up.
+    // Count tokens. Tokens on a friend's own key are theirs: not taken from the owner's
+    // counter or their share. Without their own key, a friend's job stops when their share is gone.
     if (e.type === "usage") {
-      const b = charge(user, e.input, e.output);
-      emit({ type: "budget", ...b });
-      if (isOut(user) && !job.abort.signal.aborted) { job.outOfBudget = true; job.abort.abort(); }
+      if (e.own) job.ownUsed = (job.ownUsed || 0) + (e.input || 0) + (e.output || 0);
+      const b = e.own ? budgetFor(user) : charge(user, e.input, e.output);
+      emit({ type: "budget", ...b, ...(user.role === "guest" ? { ownUsed: job.ownUsed || 0, onOwnKey: Boolean(llm.onOwnKey) } : {}) });
+      if (isOut(user) && !llm.hasFallback && !job.abort.signal.aborted) { job.outOfBudget = true; job.abort.abort(); }
     }
   };
   job.emit = emit;
 
   const settings = body.settings || {};
-  emit({ type: "mode", model: llm.model, effort: llm.effort, via: llm instanceof LocalClaudeLLM ? "local" : llm instanceof SwuLLM ? "swu" : "api" });
+  if (llm instanceof FallbackLLM) {
+    llm.onSwitch = (why) => {
+      emit({ type: "notice", message: why === "share" ? `โควตาที่เจ้าของให้ ${user.name} หมดแล้ว สลับไปใช้ API key ของ ${user.name} ทำงานต่อ` : `โทเค็นของเจ้าของเครื่องหมดแล้ว สลับไปใช้ API key ของ ${user.name} ทำงานต่อ` });
+      emit({ type: "budget", ...budgetFor(user), ownUsed: job.ownUsed || 0, onOwnKey: true });
+    };
+  }
+  const base = llm instanceof FallbackLLM ? llm.current : llm;
+  emit({ type: "mode", model: llm.model, effort: llm.effort, via: base instanceof LocalClaudeLLM ? "local" : base instanceof SwuLLM ? "swu" : "api", ownKey: Boolean(llm.onOwnKey) });
   const meta = await readMeta(project.slug);
   emit({ type: "project", slug: project.slug, name: meta?.name || project.slug, jobId: id, followUp: Boolean(existingSlug), resume: Boolean(resume), task, demoPath: `/p/${encodeURIComponent(project.slug)}/` });
   let outcome = { status: "failed" };
@@ -343,7 +407,11 @@ app.post("/api/jobs", async (req, res) => {
       if (!job.abort.signal.aborted) console.error("[job]", id, err);
       const quota = err?.quota || job.outOfBudget;
       outcome = { status: quota ? "out-of-tokens" : job.shuttingDown ? "interrupted" : job.abort.signal.aborted ? "cancelled" : "failed", error: describeError(err) };
-      const message = quota
+      const message = err?.ownKey
+        ? "API key ของคุณเองก็หมดแล้ว ทีมหยุดทำงาน เติมโควตาหรือเปลี่ยน key ในหน้าตั้งค่า แล้วกด ทำงานต่อ"
+        : quota && user.role === "guest"
+        ? "โทเค็นที่เจ้าของให้หมดแล้ว ทีมหยุดทำงาน ใส่ API key ของคุณเองในหน้าตั้งค่า (ไอคอนเฟือง) แล้วกด ทำงานต่อ ทีมจะทำต่อจากเดิม"
+        : quota
         ? "โทเค็นหมด ทีมหยุดทำงาน เมื่อโทเค็นกลับมาแล้วกด ทำงานต่อ ได้"
         : job.shuttingDown ? "เซิร์ฟเวอร์ถูกปิดระหว่างทำงาน กด ทำงานต่อ เพื่อทำต่อจากที่ค้าง"
         : job.abort.signal.aborted ? "หยุดงานแล้ว กด ทำงานต่อ ได้" : `${describeError(err)} กด ทำงานต่อ เพื่อลองต่อจากที่ค้าง`;
@@ -424,6 +492,7 @@ app.delete("/api/projects/:slug", async (req, res) => {
   if (!meta || !canAccess(req.user, meta)) return res.status(404).json({ error: "ไม่พบโปรเจกต์" });
   if (!isProjectOwner(req.user, meta)) return res.status(403).json({ error: "ลบได้เฉพาะเจ้าของโปรเจกต์" });
   if (runningJobFor(slug)) return res.status(409).json({ error: "ทีมกำลังทำงานในโปรเจกต์นี้อยู่ หยุดงานก่อนแล้วค่อยลบ" });
+  tunnel.stopTunnel(slug);
   await stopApp(slug);
   await deleteProject(slug);
   res.json({ ok: true });
@@ -477,7 +546,22 @@ app.post("/api/projects/:slug/members", ownerOnly, async (req, res) => {
 // The project's live app (its own port). Starts it when needed.
 app.get("/api/projects/:slug/app", async (req, res) => {
   if (!isSlug(req.params.slug) || !(await canAccessProject(req.user, req.params.slug))) return res.status(404).json({ error: "ไม่พบโปรเจกต์" });
-  res.json(await ensureApp(req.params.slug));
+  const state = await ensureApp(req.params.slug);
+  // Someone outside (through the tunnel) can't reach the app's port, so give the app its own link.
+  const publicUrl = await appPublicUrl(req.params.slug, state, viaTunnel(req));
+  res.json({ ...state, publicUrl, tunnel: tunnel.tunnelStatus(req.params.slug), canTunnel: Boolean(tunnel.findCloudflared()) });
+});
+app.post("/api/projects/:slug/app/tunnel", ownerOnly, async (req, res) => {
+  const slug = req.params.slug;
+  if (!isSlug(slug) || !projectExists(slug)) return res.status(404).json({ error: "ไม่พบโปรเจกต์" });
+  if (req.body?.on === false) {
+    tunnel.stopTunnel(slug);
+    return res.json({ ...(await ensureApp(slug)), publicUrl: null, tunnel: tunnel.tunnelStatus(slug) });
+  }
+  const state = await ensureApp(slug);
+  if (!state.running) return res.status(409).json({ ...state, error: state.error || state.reason || "แอปยังเปิดไม่ขึ้น" });
+  const r = await tunnel.startTunnel(slug, state.port);
+  res.status(r.url ? 200 : 502).json({ ...state, publicUrl: r.url || null, tunnel: tunnel.tunnelStatus(slug), error: r.url ? null : r.error });
 });
 app.post("/api/projects/:slug/app/restart", async (req, res) => {
   if (!isSlug(req.params.slug) || !(await canAccessProject(req.user, req.params.slug))) return res.status(404).json({ error: "ไม่พบโปรเจกต์" });
@@ -513,10 +597,13 @@ app.get(/^\/p\/([^/]+)(?:\/(.*))?$/, async (req, res) => {
   }
   if (!isSlug(slug)) return res.status(404).send("ไม่พบโปรเจกต์");
   // Opened directly (this machine or the same Wi-Fi): send visitors to the live app on its own port.
-  const forwarded = req.headers["x-forwarded-for"] || req.headers["cf-connecting-ip"] || req.headers["forwarded"];
-  if (!forwarded && projectExists(slug)) {
+  // Through the outside link: send visitors to the app's own https link (started on demand),
+  // so logins and data work there too. Falls back to the read-only view below.
+  if (projectExists(slug)) {
     const s = await ensureApp(slug).catch(() => null);
-    if (s?.running) return res.redirect(`${req.protocol}://${req.hostname}:${s.port}/${req.params[1] || ""}`);
+    if (s?.running && !viaTunnel(req)) return res.redirect(`${req.protocol}://${req.hostname}:${s.port}/${req.params[1] || ""}`);
+    const url = s?.running && (await appPublicUrl(slug, s, true).catch(() => null));
+    if (url) return res.redirect(`${url}/${req.params[1] || ""}`);
   }
   if (req.params[1] === undefined) return res.redirect(`/p/${encodeURIComponent(slug)}/`);
   const files = await loadProjectFiles(slug);
@@ -608,10 +695,12 @@ async function shutdown(sig) {
   while (live.some((j) => !j.done) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   await Promise.all(live.map((j) => { j.flush?.(); return j.writes; })).catch(() => {});
   for (const j of live) await recordJob(j.slug, { id: j.id, status: "interrupted" }).catch(() => {});
+  tunnel.stopAllTunnels();
   await stopAll().catch(() => {});
   process.exit(0);
 }
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sig, () => shutdown(sig));
+process.on("exit", () => tunnel.stopAllTunnels());
 
 /**
  * When the provider said "out of tokens", check every 15 minutes with a tiny request.
@@ -637,5 +726,12 @@ app.listen(PORT, async () => {
   const local = await localClaudeInfo();
   console.log(local.available ? `  Claude on this machine:    ${local.version}` : "  Claude Code CLI not found on this machine");
   const friendKey = process.env.SWU_API_KEY ? "SWU AI key" : serverHasKey() ? "Anthropic API key" : "";
-  console.log(friendKey ? `  Key for friends:           ${friendKey}\n` : "  Key for friends:           not set (set it in .env or the Share dialog)\n");
+  console.log(friendKey ? `  Key for friends:           ${friendKey}` : "  Key for friends:           not set (set it in .env or the Share dialog)");
+  if (/^(1|on|true|yes)$/i.test(process.env.PUBLIC_TUNNEL || "") && !PUBLIC_URL) {
+    const t = await tunnel.startTunnel("main", PORT);
+    console.log(t.url ? `  Outside link for friends:  ${t.url}` : `  Outside link failed:       ${t.error}`);
+  } else if (!PUBLIC_URL) {
+    console.log(tunnel.findCloudflared() ? "  Outside link:              off (turn it on in the Share dialog)" : "  Outside link:              cloudflared not installed (see docs/SHARING.md)");
+  }
+  console.log("");
 });

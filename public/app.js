@@ -29,10 +29,13 @@
   const getKey = () => store.get("agentOffice.key") || store.get("agentOffice.key", sessionStorage) || "";
   const getSwuKey = () => store.get("agentOffice.swuKey") || store.get("agentOffice.swuKey", sessionStorage) || "";
   const isGuest = () => config.role === "guest";
+  // A friend's own key: used when the owner's tokens (or their share) run out.
+  const getOwnKey = () => store.get("agentOffice.ownKey") || store.get("agentOffice.ownKey", sessionStorage) || null;
+  const hasOwnKey = () => Boolean(getOwnKey()?.key);
   // Default: SWU AI when the server has its key, else Claude on this machine, else an API key.
   const provider = () => (isGuest() ? "api" : settings.provider || (config.swu?.serverKey ? "swu" : config.localClaude.available ? "local" : "api"));
   const connected = () => {
-    if (isGuest()) return config.serverHasKey;
+    if (isGuest()) return config.serverHasKey || hasOwnKey();
     if (provider() === "local") return config.localClaude.available;
     if (provider() === "swu") return Boolean(getSwuKey()) || Boolean(config.swu?.serverKey);
     return config.serverHasKey || Boolean(getKey());
@@ -41,6 +44,7 @@
     settings: { ...settings, provider: provider() },
     apiKey: provider() === "api" && !isGuest() ? getKey() : "",
     swuKey: provider() === "swu" && !isGuest() ? getSwuKey() : "",
+    ...(isGuest() && hasOwnKey() ? { ownKey: { kind: getOwnKey().kind, key: getOwnKey().key }, ownFirst: Boolean(getOwnKey().first) } : {}),
   });
 
   function fillSettings() {
@@ -57,7 +61,12 @@
     $("#setSwuRemember").checked = Boolean(store.get("agentOffice.swuKey"));
     $("#setSwuModel").value = settings.swuModel || config.swu?.model || "anthropic/claude-sonnet-5.5";
     $("#setSwuKey").placeholder = config.swu?.serverKey ? "ใช้ SWU key ในไฟล์ .env ของเซิร์ฟเวอร์อยู่แล้ว (เว้นว่างได้)" : "API key จากเว็บไซต์ SWU AI";
-    $("#usedText").textContent = `${fmt(budget.used)} tokens`;
+    const own = getOwnKey();
+    $("#setOwnKind").value = own?.kind || "";
+    $("#setOwnKey").value = own?.key || "";
+    $("#setOwnFirst").checked = Boolean(own?.first);
+    $("#setOwnRemember").checked = !own || Boolean(store.get("agentOffice.ownKey"));
+    renderBudget(budget);
     syncSettingsForm();
   }
   function syncSettingsForm() {
@@ -73,10 +82,12 @@
       : p === "swu"
         ? "ใช้ token จากโควตา SWU AI ของคุณ key จะถูกส่งไปที่เซิร์ฟเวอร์นี้ตอนเริ่มงานเท่านั้น"
         : (config.serverHasKey ? "เซิร์ฟเวอร์มี API key อยู่แล้ว ใส่ key ของคุณเองเพื่อใช้แทนได้" : "ใส่ API key จาก console.anthropic.com key จะถูกส่งไปที่เซิร์ฟเวอร์นี้ตอนเริ่มงานเท่านั้น");
+    $("#ownKeyFields").hidden = !$("#setOwnKind").value;
     const m = config.models.find((x) => x.id === $("#setModel").value);
     $("#setEffort").disabled = Boolean(m && !m.effort);
   }
   $("#setProvider").addEventListener("change", syncSettingsForm);
+  $("#setOwnKind").addEventListener("change", syncSettingsForm);
   $("#loadSwuModels").addEventListener("click", async () => {
     const key = $("#setSwuKey").value.trim();
     if (!key && !config.swu?.serverKey) { $("#swuNote").textContent = "ใส่ SWU API key ก่อน"; return; }
@@ -95,7 +106,6 @@
   $("#settingsBtn").addEventListener("click", () => { fillSettings(); $("#settings").showModal(); });
   $("#resetUsage").addEventListener("click", async () => {
     renderBudget(await api("/api/usage/reset", {}));
-    $("#usedText").textContent = `${fmt(budget.used)} tokens`;
   });
   $("#settings").addEventListener("close", async () => {
     if ($("#settings").returnValue !== "save") return;
@@ -116,6 +126,13 @@
     store.del("agentOffice.key");
     store.del("agentOffice.key", sessionStorage);
     if (key) store.set("agentOffice.key", key, $("#setRemember").checked ? localStorage : sessionStorage);
+    if (isGuest()) {
+      const own = { kind: $("#setOwnKind").value, key: $("#setOwnKey").value.trim(), first: $("#setOwnFirst").checked };
+      store.del("agentOffice.ownKey");
+      store.del("agentOffice.ownKey", sessionStorage);
+      if (own.kind && own.key) store.set("agentOffice.ownKey", own, $("#setOwnRemember").checked ? localStorage : sessionStorage);
+      renderBudget(budget);
+    }
   });
 
   // ---------- share with friends (owner only) ----------
@@ -134,9 +151,40 @@
         <code class="link-box">${esc(shareBase() + "/i/" + i.code)}</code>
       </div>`).join("") : `<p class="muted small">ยังไม่มีลิงก์เชิญ</p>`;
   }
-  $("#shareBtn").addEventListener("click", async () => {
+  // Outside link: a Cloudflare quick tunnel to Agent Office (each app gets its own when opened).
+  let tunnelOn = false;
+  function renderTunnel(t, error) {
+    config.shareBases = t.shareBases || config.shareBases;
+    tunnelOn = Boolean(t.main?.url);
+    const btn = $("#tunnelToggle");
+    btn.disabled = false;
+    btn.querySelector("span").textContent = tunnelOn ? "ปิดลิงก์คนนอกบ้าน" : "เปิดให้คนนอกบ้านเข้า";
+    btn.classList.toggle("primary", !tunnelOn);
+    $("#tunnelState").innerHTML = t.fixed
+      ? `ใช้ที่อยู่ที่ตั้งไว้ใน .env: <code>${esc(t.fixed)}</code>`
+      : tunnelOn
+        ? `เปิดแล้ว คนนอกบ้านเข้าได้ที่ <code>${esc(t.main.url)}</code> ลิงก์เชิญด้านล่างใช้ที่อยู่นี้ให้แล้ว (ที่อยู่จะเปลี่ยนเมื่อปิดแล้วเปิดใหม่ ให้ส่งลิงก์เชิญใหม่)`
+        : "เพื่อนในวง Wi-Fi เดียวกันเปิดได้เลย ถ้าเพื่อนอยู่นอกบ้าน กดปุ่มนี้";
+    btn.hidden = Boolean(t.fixed);
+    const hint = error || (!t.available && !t.fixed ? t.hint : "");
+    $("#tunnelHint").hidden = !hint;
+    $("#tunnelHint").textContent = hint || "";
+  }
+  $("#tunnelToggle").addEventListener("click", async () => {
+    const btn = $("#tunnelToggle");
+    btn.disabled = true;
+    btn.querySelector("span").textContent = tunnelOn ? "กำลังปิด…" : "กำลังเปิด (ไม่เกิน 30 วินาที)…";
+    const res = await fetch("/api/tunnel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: !tunnelOn }) });
+    const t = await res.json().catch(() => ({}));
+    if (t.main?.url) store.del("agentOffice.shareBase");
+    renderTunnel(t, t.error);
     $("#shareBase").value = shareBase();
+    renderInvites();
+  });
+  $("#shareBtn").addEventListener("click", async () => {
     $("#serverKey").value = "";
+    try { renderTunnel(await api("/api/tunnel")); } catch { /* older server */ }
+    $("#shareBase").value = shareBase();
     await renderInvites();
     $("#share").showModal();
   });
@@ -165,14 +213,39 @@
 
   // ---------- token usage ----------
   let budget = { used: 0, exhausted: false };
+  const when = (iso) => new Date(iso).toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" });
   function renderBudget(b) {
     if (!b) return;
     budget = b;
-    $("#tokenText").textContent = b.exhausted ? (isGuest() ? "โควตาโทเค็นหมด" : "โทเค็นหมด") : `ใช้ไปแล้ว ${fmt(b.used)} tokens`;
-    $("#tokenChip").classList.toggle("out", Boolean(b.exhausted));
+    const cap = !isGuest() && b.roundLimit ? ` / ~${fmt(b.roundLimit)}` : "";
+    const onOwn = isGuest() && (b.onOwnKey || (b.exhausted && hasOwnKey()));
+    $("#tokenText").textContent = onOwn
+      ? `ใช้ key ของคุณ${b.ownUsed ? ` ${fmt(b.ownUsed)} tokens` : ""}`
+      : b.exhausted ? (isGuest() ? "โควตาโทเค็นหมด" : "โทเค็นหมด") : `ใช้ไปแล้ว ${fmt(b.used)}${cap} tokens`;
+    $("#tokenChip").classList.toggle("out", Boolean(b.exhausted) && !onOwn);
+    const next = b.nextResetAt ? ` น่าจะรีเซ็ตราว ${when(b.nextResetAt)}` : "";
     $("#tokenChip").title = b.exhausted
-      ? "ต้นทางแจ้งว่าโทเค็นหมด เมื่อต้นทางรีเซ็ตแล้วจะกลับมาใช้ได้และตัวนับเริ่มใหม่เอง"
-      : `นับตั้งแต่ ${b.since ? new Date(b.since).toLocaleString("th-TH") : "-"}${isGuest() && b.limit ? ` · โควตา ${fmt(b.limit)} tokens` : ""}`;
+      ? `ต้นทางแจ้งว่าโทเค็นหมด เมื่อต้นทางรีเซ็ตแล้วจะกลับมาใช้ได้และตัวนับเริ่มใหม่เอง${next}`
+      : `นับตั้งแต่ ${b.since ? when(b.since) : "-"}${isGuest() && b.limit ? ` · โควตา ${fmt(b.limit)} tokens` : ""}${cap ? ` · ต้นทางให้ประมาณ ${fmt(b.roundLimit)} tokens ต่อรอบ` : ""}`;
+    if ($("#usedText")) $("#usedText").textContent = `${fmt(b.used)} tokens`;
+    if ($("#roundsText")) $("#roundsText").innerHTML = roundsSummary(b);
+  }
+  function span(ms) {
+    const h = ms / 3600e3;
+    return h >= 36 ? `${Math.round(h / 24)} วัน` : h >= 1 ? `${Math.round(h)} ชั่วโมง` : `${Math.max(1, Math.round(ms / 60e3))} นาที`;
+  }
+  /** What the past rounds taught us about the upstream limit (owner only). */
+  function roundsSummary(b) {
+    if (!b.roundLimit) {
+      return b.lastReset?.reason === "upstream"
+        ? `ยังไม่รู้ว่าต้นทางจำกัดกี่ token ต่อรอบ รอบนี้เริ่มนับตั้งแต่ต้นทางรีเซ็ต (${when(b.lastReset.at)}) พอใช้จนหมดแล้วต้นทางรีเซ็ตอีกครั้ง ระบบจะรู้และแสดงให้เอง`
+        : "ยังไม่รู้ว่าต้นทางจำกัดกี่ token ต่อรอบ ระบบจะจำเองหลังโทเค็นหมดแล้วต้นทางรีเซ็ตครบ 2 ครั้ง (รอบแรกมักเริ่มนับกลางทาง จึงยังใช้วัดไม่ได้)";
+    }
+    const parts = [`ต้นทางให้ประมาณ <b>${fmt(b.roundLimit)}</b> tokens ต่อรอบ (ดูจาก ${b.roundsSeen} รอบที่ใช้จนหมด)`];
+    if (b.periodMs) parts.push(`รีเซ็ตประมาณทุก ${span(b.periodMs)}`);
+    if (b.nextResetAt) parts.push(`ครั้งถัดไปราว ${when(b.nextResetAt)}`);
+    const last = (b.rounds || []).slice(-3).reverse().map((r) => `<li>${fmt(r.used)} tokens · ${when(r.from)} ถึง ${when(r.outAt || r.to)}</li>`).join("");
+    return parts.join(" · ") + (last ? `<ul class="rounds-list">${last}</ul>` : "");
   }
 
   // ---------- examples + attachments ----------
@@ -454,37 +527,56 @@
     const local = /^(localhost|127\.|\[::1\])/.test(location.hostname);
     return (local ? shareBase() : location.origin) + demoPath;
   }
-  // Each project runs as its own website on its own port. Through a tunnel (a domain
-  // name instead of an IP) only Agent Office's port is reachable, so fall back to /p/.
+  // Each project runs as its own website on its own port. Through the outside link (a
+  // domain name instead of an IP) that port is unreachable, so the app gets its own
+  // https link instead; /p/ is the last fallback.
   const directHost = () => /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:]+\])$/i.test(location.hostname);
   let appState = null;
   async function refreshPreview(force) {
     if (!project || !hasPage()) return;
     const slug = project.slug;
     let url = project.demoPath, share = shareUrl(project.demoPath);
-    if (directHost()) {
-      $("#previewInfo").textContent = "กำลังเปิดแอป…";
-      try { appState = await api(`/api/projects/${encodeURIComponent(slug)}/app`); } catch { appState = null; }
-      if (project?.slug !== slug) return;
-      if (appState?.running) {
-        url = `${location.protocol}//${location.hostname}:${appState.port}/`;
-        share = `${new URL(shareBase()).protocol}//${new URL(shareBase()).hostname}:${appState.port}/`;
-      }
+    $("#previewInfo").textContent = directHost() ? "กำลังเปิดแอป…" : "กำลังเปิดแอปและสร้างลิงก์ของแอป (ครั้งแรกใช้เวลาสักครู่)…";
+    try { appState = await api(`/api/projects/${encodeURIComponent(slug)}/app`); } catch { appState = null; }
+    if (project?.slug !== slug) return;
+    const pub = appState?.running && appState.publicUrl ? appState.publicUrl.replace(/\/+$/, "") + "/" : "";
+    if (appState?.running && directHost()) {
+      url = `${location.protocol}//${location.hostname}:${appState.port}/`;
+      share = pub || `${new URL(shareBase()).protocol}//${new URL(shareBase()).hostname}:${appState.port}/`;
+    } else if (pub) {
+      url = share = pub;
     }
     $("#openPreview").href = url;
     $("#openDemoTop").href = url;
     for (const id of ["#openPreview", "#copyLink", "#demoLink", "#restartApp"]) $(id).hidden = false;
     $("#reloadPreview").disabled = false;
     $("#demoLink").textContent = share;
-    const broken = directHost() && appState && !appState.running;
+    const canShareOut = config.role === "owner" && directHost() && appState?.running;
+    $("#appTunnel").hidden = !canShareOut;
+    $("#appTunnel").querySelector("span").textContent = pub ? "ปิดลิงก์นอกบ้านของแอป" : "แชร์แอปนี้ออกนอกบ้าน";
+    const broken = appState && !appState.running && (directHost() || appState.error);
     $("#previewInfo").textContent = broken
       ? `แอปเปิดไม่ขึ้น: ${appState.error || appState.reason || "ไม่ทราบสาเหตุ"}`
+      : !directHost() && pub ? "แอปนี้มีลิงก์ของตัวเอง สมัครและ login ได้จริง ถ้า login ในกรอบนี้ไม่ติด กด \"เปิด\" เพื่อใช้ในแท็บใหม่"
+      : pub ? "แอปนี้มีลิงก์ https ของตัวเองแล้ว ส่งลิงก์นี้ให้ใครก็ได้ แม้อยู่นอกบ้าน"
       : appState?.kind === "app" ? "แอปจริง (มีเซิร์ฟเวอร์และฐานข้อมูล) ลิงก์นี้ส่งให้คนในวง Wi-Fi เดียวกันลองได้" : "ลิงก์เดโม่สำหรับแชร์";
     $("#appLog").hidden = !(broken && appState.logs);
     $("#appLog").textContent = broken ? appState.logs || "" : "";
     if (force || $(".tab[data-tab=preview]").classList.contains("active")) $("#previewFrame").src = url;
   }
   $("#reloadPreview").addEventListener("click", () => refreshPreview(true));
+  $("#appTunnel").addEventListener("click", async () => {
+    if (!project) return;
+    const on = !appState?.publicUrl;
+    const btn = $("#appTunnel");
+    btn.disabled = true;
+    $("#previewInfo").textContent = on ? "กำลังสร้างลิงก์ https ของแอป (ไม่เกิน 30 วินาที)…" : "กำลังปิดลิงก์…";
+    const res = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/app/tunnel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on }) });
+    const r = await res.json().catch(() => ({}));
+    btn.disabled = false;
+    await refreshPreview(false);
+    if (!res.ok && r.error) $("#previewInfo").textContent = r.error;
+  });
   $("#restartApp").addEventListener("click", async () => {
     if (!project) return;
     $("#previewInfo").textContent = "กำลังรีสตาร์ทแอป…";
@@ -919,7 +1011,7 @@
     $("#testView").innerHTML = `<div class="empty">ยังไม่ได้รันเทสต์</div>`;
     $("#liveView").innerHTML = `<div class="empty">ข้อความที่ agent กำลังพิมพ์จะแสดงที่นี่แบบสด</div>`;
     $("#fileHead").innerHTML = ""; $("#fileBody").textContent = "";
-    for (const id of ["#zipBtn", "#openPreview", "#saveLocalBtn", "#copyLink", "#demoLink"]) $(id).hidden = true;
+    for (const id of ["#zipBtn", "#openPreview", "#saveLocalBtn", "#copyLink", "#demoLink", "#appTunnel"]) $(id).hidden = true;
     $("#reloadPreview").disabled = true;
     $("#previewInfo").textContent = "ลิงก์เดโม่จะใช้ได้เมื่อทีมสร้างไฟล์ HTML";
     $("#previewFrame").removeAttribute("src");

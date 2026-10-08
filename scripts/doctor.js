@@ -6,6 +6,7 @@ import { nodeVersionOk, sandboxWorks, canWrite } from "../src/doctor.js";
 import { portIsFree } from "../src/sandbox.js";
 import { localClaudeInfo } from "../src/claude-code.js";
 import { swuModels } from "../src/llm.js";
+import { findCloudflared, INSTALL_HINT } from "../src/tunnel.js";
 
 const rows = [];
 let fatal = false;
@@ -48,6 +49,10 @@ const local = await localClaudeInfo();
 if (local.available) { row(true, "Claude Code ในเครื่อง", `${local.version} (ถ้ายังไม่ได้ล็อกอิน: พิมพ์ claude แล้ว /login)`); providers++; }
 else row(null, "Claude Code ในเครื่อง", "ไม่พบ (ไม่จำเป็นถ้ามี key อื่น)");
 row(providers > 0, "ช่องทางเชื่อม Claude", providers ? `พร้อม ${providers} ช่องทาง` : "ยังไม่มีเลย: ใส่ SWU_API_KEY หรือ ANTHROPIC_API_KEY ใน .env หรือติดตั้ง Claude Code", true);
+
+// Optional: the outside link for friends who are not on the same Wi-Fi.
+const cf = findCloudflared();
+row(cf ? true : null, "cloudflared (ลิงก์ให้คนนอกบ้าน)", cf || `ไม่พบ ตอนนี้เพื่อนเข้าได้เฉพาะในวง Wi-Fi เดียวกัน ${INSTALL_HINT}`);
 
 console.log(`\n  Agent Office doctor\n\n${rows.join("\n")}\n\n  ${fatal ? "ยังไม่พร้อม: แก้รายการ [FAIL] ก่อน" : "พร้อมใช้งาน: npm start"}\n`);
 process.exit(fatal ? 1 : 0);
