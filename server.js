@@ -10,6 +10,7 @@ import { LocalClaudeLLM, localClaudeInfo } from "./src/claude-code.js";
 import * as usage from "./src/usage.js";
 import * as access from "./src/access.js";
 import { ensureApp, restartApp, stopApp, stopAll } from "./src/apprunner.js";
+import { startupProblems } from "./src/doctor.js";
 import { safePath, zip } from "./src/workspace.js";
 import { PROJECTS_DIR, createProject, writeProjectFile, readMeta, loadProjectFiles, listProjects, isSlug, projectExists, appendJobEvents, readJobEvents, recordJob, deleteProject, setMember, canAccess, isProjectOwner } from "./src/projects.js";
 import { offlineStep, BRIEF_SCHEMA, BRIEF_SYSTEM, briefPrompt } from "./src/brief.js";
@@ -19,6 +20,13 @@ const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_URL = (process.env.PUBLIC_URL || "").replace(/\/+$/, "");
 const MAX_RUNNING = Number(process.env.MAX_RUNNING_JOBS || 3);
 const JOB_TTL_MS = 6 * 60 * 60 * 1000;
+
+// Refuse to start on a machine that can't run the team safely, and say why.
+const problems = startupProblems({ dataDir: path.resolve(process.env.DATA_DIR || "data"), projectsDir: PROJECTS_DIR });
+if (problems.length) {
+  console.error(`\n  Agent Office เปิดไม่ได้:\n${problems.map((p) => `  - ${p}`).join("\n")}\n  ตรวจทั้งหมดได้ด้วย: npm run doctor\n`);
+  process.exit(1);
+}
 
 const app = express();
 app.disable("x-powered-by");

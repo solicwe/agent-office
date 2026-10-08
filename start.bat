@@ -4,12 +4,18 @@ cd /d "%~dp0"
 if "%PORT%"=="" set PORT=3000
 
 where node >nul 2>nul
-if errorlevel 1 (
-  echo Node.js 22 or newer is required. Opening the download page...
+if errorlevel 1 goto nonode
+node -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>22||(a===22&&b>=13)?0:1)"
+if errorlevel 1 goto nonode
+goto haveNode
+:nonode
+(
+  echo Node.js 22.13 or newer is required. Opening the download page...
   start "" https://nodejs.org/
   pause
   exit /b 1
 )
+:haveNode
 
 if not exist node_modules (
   call npm install --no-fund --no-audit

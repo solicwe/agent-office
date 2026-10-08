@@ -1,15 +1,16 @@
 {
   "name": "ai-agent-office",
   "version": "1.0.0",
-  "description": "AI Agent Teams: a virtual office where Claude agents analyze, code, test, review and debug until the job passes",
+  "description": "AI Agent Teams: a virtual office where AI agents analyze, code, test, review and debug until the job passes",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node --env-file-if-exists=.env server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "doctor": "node --env-file-if-exists=.env scripts/doctor.js"
   },
   "engines": {
-    "node": ">=22.9"
+    "node": ">=22.13"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",

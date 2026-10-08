@@ -43,8 +43,12 @@ export const ownerToken = (() => {
     if (t.length >= 20) return t;
   } catch { /* create below */ }
   const t = randomBytes(24).toString("base64url");
-  mkdirSync(DATA, { recursive: true });
-  writeFileSync(OWNER_FILE, t + "\n");
+  try {
+    mkdirSync(DATA, { recursive: true });
+    writeFileSync(OWNER_FILE, t + "\n");
+  } catch {
+    /* data/ not writable: the startup check reports it and stops the server */
+  }
   return t;
 })();
 

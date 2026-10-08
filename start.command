@@ -9,8 +9,8 @@ if ! command -v node >/dev/null 2>&1; then
   read -r -p "ติดตั้งเสร็จแล้วดับเบิลคลิกไฟล์นี้อีกครั้ง (กด Enter เพื่อปิด)"
   exit 1
 fi
-if [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 22 ]; then
-  echo "Node.js ต้องเป็นเวอร์ชัน 22 ขึ้นไป (ตอนนี้ $(node -v)) กำลังเปิดหน้าดาวน์โหลด..."
+if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=13)?0:1)'; then
+  echo "Node.js ต้องเป็นเวอร์ชัน 22.13 ขึ้นไป (ตอนนี้ $(node -v)) กำลังเปิดหน้าดาวน์โหลด..."
   open "https://nodejs.org/"
   read -r -p "กด Enter เพื่อปิด"
   exit 1
