@@ -559,5 +559,6 @@ app.listen(PORT, async () => {
   console.log(`  Projects are saved in:     ${PROJECTS_DIR}`);
   const local = await localClaudeInfo();
   console.log(local.available ? `  Claude on this machine:    ${local.version}` : "  Claude Code CLI not found on this machine");
-  console.log(serverHasKey() ? "  API key for friends:       set\n" : "  API key for friends:       not set (set it in the Share dialog)\n");
+  const friendKey = process.env.SWU_API_KEY ? "SWU AI key" : serverHasKey() ? "Anthropic API key" : "";
+  console.log(friendKey ? `  Key for friends:           ${friendKey}\n` : "  Key for friends:           not set (set it in .env or the Share dialog)\n");
 });

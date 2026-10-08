@@ -669,11 +669,12 @@
     $("#openDemoTop").href = project?.demoPath || "#";
     // The latest round stopped part-way: offer to continue it instead of starting over.
     const last = jobs.at(-1);
+    latestJobId = last?.id || null;
     resumable = last && !meta?.runningJob && RESUMABLE.includes(last.status) ? last.id : null;
     $("#resumeBtn").hidden = !resumable;
   }
   const RESUMABLE = ["interrupted", "failed", "cancelled", "out-of-tokens"];
-  let resumable = null;
+  let resumable = null, latestJobId = null;
   $("#resumeBtn").addEventListener("click", async () => {
     if (!project || !resumable) return;
     if (!connected()) { fillSettings(); $("#settings").showModal(); return; }
@@ -848,6 +849,8 @@
         chatSys(e.message, "bad", "OctagonAlert");
         ORDER.forEach((id) => { office.setStatus(id, "idle"); setMember(id, "idle"); });
         if (e.resumable) office.lab("idle");
+        // Only the latest round can be continued: resuming an older one would overwrite newer work.
+        if (e.resumable && latestJobId && jobId !== latestJobId) chatSys("รอบนี้ทำต่อไม่ได้แล้ว เพราะมีรอบที่ใหม่กว่าทำงานต่อจากไฟล์ล่าสุดไปแล้ว ถ้ายังขาดอะไร ให้สั่งงานเพิ่มได้เลย", "", "Info");
         break;
       case "end":
         finishStream();
