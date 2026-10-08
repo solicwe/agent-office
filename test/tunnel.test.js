@@ -68,6 +68,10 @@ test("someone coming through the outside link gets the app's own https link", { 
   // On this machine the owner sees the same link and can close it.
   const local = await (await f(BASE + "/api/projects/shop/app")).json();
   assert.equal(local.publicUrl, st.publicUrl);
+  // Restarting the app keeps its port, so the link friends have keeps working.
+  const again = await (await f(BASE + "/api/projects/shop/app/restart", { method: "POST", headers: json, body: "{}" })).json();
+  assert.equal(again.port, st.port);
+  assert.equal(again.publicUrl, st.publicUrl);
   const off = await (await f(BASE + "/api/projects/shop/app/tunnel", { method: "POST", headers: json, body: JSON.stringify({ on: false }) })).json();
   assert.equal(off.publicUrl, null);
 });

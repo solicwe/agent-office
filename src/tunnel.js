@@ -113,3 +113,6 @@ export function stopAllTunnels() {
 
 /** The public base URL of Agent Office itself, when its tunnel is up. */
 export const mainPublicUrl = () => tunnelStatus("main").url;
+
+/** Is this port published by an app tunnel other than `slug`'s? */
+export const portPublishedByOther = (port, slug) => [...tunnels].some(([k, x]) => k !== "main" && k !== slug && x.port === port);

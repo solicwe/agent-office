@@ -23,3 +23,9 @@ test("the link is held back until the tunnel is connected", async () => {
   assert.equal(again.url, first.url);
   assert.ok(Date.now() - t0 >= 1200, "waited for the connection");
 });
+
+test("a port published under one app's link is not handed to another project", () => {
+  assert.equal(tunnel.portPublishedByOther(4999, "other-app"), true);
+  assert.equal(tunnel.portPublishedByOther(4999, "demo-app"), false, "the same app may keep it");
+  assert.equal(tunnel.portPublishedByOther(5001, "other-app"), false);
+});

@@ -9,7 +9,7 @@ import { ClaudeLLM, SwuLLM, swuModels, SWU_BASE_URL, MODELS, EFFORTS, DEFAULT_MO
 import { LocalClaudeLLM, localClaudeInfo } from "./src/claude-code.js";
 import * as usage from "./src/usage.js";
 import * as access from "./src/access.js";
-import { ensureApp, restartApp, stopApp, stopAll } from "./src/apprunner.js";
+import { ensureApp, restartApp, stopApp, stopAll, setPortGuard } from "./src/apprunner.js";
 import { startupProblems } from "./src/doctor.js";
 import * as tunnel from "./src/tunnel.js";
 import { FallbackLLM } from "./src/fallback.js";
@@ -192,6 +192,19 @@ app.post("/api/tunnel", ownerOnly, async (req, res) => {
   const r = await tunnel.startTunnel("main", PORT);
   res.status(r.url ? 200 : 502).json({ ...tunnelInfo(), error: r.url ? null : r.error });
 });
+
+setPortGuard(tunnel.portPublishedByOther);
+
+/**
+ * After an app (re)started: if it came back on another port, its outside link must
+ * follow it (a new link), never keep pointing at a port another project may take.
+ */
+async function followPort(slug, state) {
+  const t = tunnel.tunnelStatus(slug);
+  if (!t.on || t.port === state?.port) return;
+  tunnel.stopTunnel(slug);
+  if (state?.running) await tunnel.startTunnel(slug, state.port);
+}
 
 /** The app's own public https link (its own tunnel), started on demand. */
 async function appPublicUrl(slug, state, start) {
@@ -432,7 +445,7 @@ app.post("/api/jobs", async (req, res) => {
       await job.writes;
       await recordJob(job.slug, { id, ...outcome, finishedAt: new Date().toISOString() }).catch(() => {});
       // Reload the live demo so it runs the files the team just wrote.
-      if (!shuttingDown) restartApp(job.slug, { onlyIfRunning: true }).catch(() => {});
+      if (!shuttingDown) restartApp(job.slug, { onlyIfRunning: true }).then((st) => followPort(job.slug, st)).catch(() => {});
       for (const c of job.clients) c.end();
       job.clients.clear();
       setTimeout(() => jobs.delete(id), JOB_TTL_MS).unref();
@@ -553,6 +566,7 @@ app.post("/api/projects/:slug/members", ownerOnly, async (req, res) => {
 app.get("/api/projects/:slug/app", async (req, res) => {
   if (!isSlug(req.params.slug) || !(await canAccessProject(req.user, req.params.slug))) return res.status(404).json({ error: "ไม่พบโปรเจกต์" });
   const state = await ensureApp(req.params.slug);
+  await followPort(req.params.slug, state);
   // Someone outside (through the tunnel) can't reach the app's port, so give the app its own link.
   const publicUrl = await appPublicUrl(req.params.slug, state, viaTunnel(req));
   res.json({ ...state, publicUrl, tunnel: tunnel.tunnelStatus(req.params.slug), canTunnel: Boolean(tunnel.findCloudflared()) });
@@ -571,7 +585,9 @@ app.post("/api/projects/:slug/app/tunnel", ownerOnly, async (req, res) => {
 });
 app.post("/api/projects/:slug/app/restart", async (req, res) => {
   if (!isSlug(req.params.slug) || !(await canAccessProject(req.user, req.params.slug))) return res.status(404).json({ error: "ไม่พบโปรเจกต์" });
-  res.json(await restartApp(req.params.slug));
+  const state = await restartApp(req.params.slug);
+  await followPort(req.params.slug, state);
+  res.json({ ...state, publicUrl: tunnel.tunnelStatus(req.params.slug).url });
 });
 
 app.get("/api/projects/:slug/files", async (req, res) => {

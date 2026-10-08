@@ -12,12 +12,26 @@ const apps = new Map(); // slug -> { site, port, kind, starting }
 
 const projectDir = (slug) => path.join(PROJECTS_DIR, slug);
 
-async function pickPort(slug) {
+// Ports still published under another project's outside link must not be reused,
+// or that link would show this project. Set by the server.
+let reservedFor = () => false;
+export function setPortGuard(fn) { reservedFor = fn; }
+
+async function pickPort(slug, { waitMs = 0 } = {}) {
   const meta = await readMeta(slug);
   const taken = new Set([...apps.values()].map((a) => a.port));
-  if (meta?.port && !taken.has(meta.port) && (await portIsFree(meta.port))) return meta.port;
+  const usable = (p) => !taken.has(p) && !reservedFor(p, slug);
+  // Keep the same port across restarts (its outside link keeps working); the old
+  // process may need a moment to let go of it.
+  if (meta?.port && usable(meta.port)) {
+    const until = Date.now() + waitMs;
+    do {
+      if (await portIsFree(meta.port)) return meta.port;
+      await new Promise((r) => setTimeout(r, 200));
+    } while (Date.now() < until);
+  }
   for (let p = BASE_PORT; p < BASE_PORT + MAX_APPS; p++) {
-    if (!taken.has(p) && (await portIsFree(p))) {
+    if (usable(p) && (await portIsFree(p))) {
       await saveMeta(slug, { port: p });
       return p;
     }
@@ -26,7 +40,7 @@ async function pickPort(slug) {
 }
 
 /** Start the project's site if it is not running. Resolves to its status. */
-export async function ensureApp(slug) {
+export async function ensureApp(slug, { waitForPort = 0 } = {}) {
   if (!isSlug(slug)) throw new Error("bad project");
   const current = apps.get(slug);
   if (current?.starting) return current.starting;
@@ -38,7 +52,7 @@ export async function ensureApp(slug) {
   const entry = { port: null, kind: hasServerJs ? "app" : "static", site: null };
   entry.starting = (async () => {
     try {
-      entry.port = await pickPort(slug);
+      entry.port = await pickPort(slug, { waitMs: waitForPort });
       entry.site = await startSite(dir, { port: entry.port, hasServerJs, timeoutMs: 20_000 });
     } catch (err) {
       entry.error = err.message;
@@ -75,7 +89,7 @@ export async function stopApp(slug) {
 export async function restartApp(slug, { onlyIfRunning = false } = {}) {
   if (onlyIfRunning && !apps.has(slug)) return status(slug);
   await stopApp(slug);
-  return ensureApp(slug);
+  return ensureApp(slug, { waitForPort: 3000 });
 }
 
 export async function stopAll() {
