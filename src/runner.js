@@ -3,8 +3,8 @@
 // processes: they read only their temp folder, write only its data/ folder, and
 // cannot spawn processes, start workers or use node:sqlite.
 import { spawn } from "node:child_process";
-import { startSite, crawl, hasServer } from "./sandbox.js";
-import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
+import { startSite, crawl, hasServer, nodeSandboxArgs } from "./sandbox.js";
+import { mkdtemp, writeFile, mkdir, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import vm from "node:vm";
@@ -91,7 +91,7 @@ export async function runProject(files) {
   const logs = [];
   if (!testPaths.length && !hasPages && !hasServer(files)) return summarize(results, logs);
 
-  const dir = await mkdtemp(path.join(tmpdir(), "agent-office-"));
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "agent-office-"))); // macOS tmpdir is a symlink
   let site = null;
   try {
     for (const [p, content] of Object.entries(files)) {
@@ -169,7 +169,7 @@ function summarize(results, logs) {
 
 function spawnNode(dir, file, baseUrl) {
   return new Promise((resolve) => {
-    const args = ["--no-experimental-sqlite", "--permission", `--allow-fs-read=${dir}`, `--allow-fs-write=${path.join(dir, "data")}`, file];
+    const args = [...nodeSandboxArgs(dir), file];
     const child = spawn(process.execPath, args, {
       cwd: dir,
       env: { NODE_ENV: "test", BASE_URL: baseUrl || "", DATA_DIR: path.join(dir, "data"), SystemRoot: process.env.SystemRoot || "" },

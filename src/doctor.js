@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { nodeSandboxArgs } from "./sandbox.js";
 
 const MIN = [22, 13]; // --permission without warnings and --no-experimental-sqlite
 
@@ -25,7 +26,7 @@ export function sandboxWorks() {
       try { require("node:sqlite"); } catch { sqlite = false; }
       fs.writeFileSync(__dirname + "/data/ok.txt", "ok");
       console.log(JSON.stringify({ wroteOutside, spawned, sqlite }));`);
-    const r = spawnSync(process.execPath, ["--no-experimental-sqlite", "--permission", `--allow-fs-read=${dir}`, `--allow-fs-write=${path.join(dir, "data")}`, "probe.js"], { cwd: dir, encoding: "utf8", timeout: 15_000, windowsHide: true });
+    const r = spawnSync(process.execPath, [...nodeSandboxArgs(dir), "probe.js"], { cwd: dir, encoding: "utf8", timeout: 15_000, windowsHide: true });
     const line = String(r.stdout || "").trim().split("\n").pop();
     let out;
     try { out = JSON.parse(line); } catch { return { ok: false, detail: (r.stderr || r.error?.message || "sandbox did not start").trim().split("\n")[0] }; }

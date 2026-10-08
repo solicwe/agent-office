@@ -7,14 +7,20 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createServer as netServer } from "node:net";
 import { readFile, stat, mkdir } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 
-export const nodeSandboxArgs = (dir) => [
-  "--no-experimental-sqlite",
-  "--permission",
-  `--allow-fs-read=${dir}`,
-  `--allow-fs-write=${path.join(dir, "data")}`,
-];
+// --permission checks the real path, so a folder reached through a symlink (macOS
+// tmpdir is /var/folders -> /private/var/folders) must be allowed by its real path.
+export const nodeSandboxArgs = (folder) => {
+  const dir = realpathSync(folder);
+  return [
+    "--no-experimental-sqlite",
+    "--permission",
+    `--allow-fs-read=${dir}`,
+    `--allow-fs-write=${path.join(dir, "data")}`,
+  ];
+};
 
 export const hasServer = (files) => typeof files["server.js"] === "string";
 
@@ -94,6 +100,7 @@ export async function startSite(dir, { port, hasServerJs, timeoutMs = 15_000, on
   }
 
   await mkdir(path.join(dir, "data"), { recursive: true });
+  dir = realpathSync(dir); // DATA_DIR must match the path the sandbox allows
   const child = spawn(process.execPath, [...nodeSandboxArgs(dir), "server.js"], {
     cwd: dir,
     env: { PORT: String(port), DATA_DIR: path.join(dir, "data"), NODE_ENV: "production", SystemRoot: process.env.SystemRoot || "" },
