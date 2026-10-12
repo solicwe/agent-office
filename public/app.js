@@ -442,6 +442,32 @@
     chat.scrollTop = chat.scrollHeight;
   }
 
+  const MODE_LABEL = { auto: "ทีมเลือกเอง", quick: "แก้เฉพาะส่วน", full: "ทำทั้งโครง" };
+  /** The sender's own message, on the right like any chat app. */
+  function chatUser(text, by, mode, focus) {
+    chat.querySelector(".empty")?.remove();
+    const div = document.createElement("div");
+    div.className = "msg me";
+    const tags = [mode && mode !== "auto" ? MODE_LABEL[mode] || mode : "", focus?.length ? focus.join(", ") : ""].filter(Boolean).map((t) => `<span class="tag-mode">${esc(t)}</span>`).join("");
+    div.innerHTML = `<span class="me-ava">${icon("User", 16)}</span><div class="body"><div class="who">${esc(by || "คุณ")} <span>· ${time()}</span>${tags}</div><div class="text">${esc(text)}</div></div>`;
+    chat.append(div);
+    chat.scrollTop = chat.scrollHeight;
+  }
+  /** Who Archie chose for this message, and why. */
+  function routeCard(e) {
+    chat.querySelector(".empty")?.remove();
+    const head = e.mode === "answer" ? "ตอบคำถาม ไม่ต้องแก้ไฟล์" : e.mode === "quick" ? `แก้เฉพาะส่วน · ใช้ ${e.team.length} คน` : "งานใหญ่ · เรียกทั้งทีม";
+    const team = e.mode === "full" ? ORDER : e.team;
+    const div = document.createElement("div");
+    div.className = "route-card";
+    div.innerHTML = `<div class="rc-head">${icon("Workflow", 14)}<span>Archie เลือกทีม: ${esc(head)}</span></div>
+      <div class="rc-team">${team.map((id) => `<span class="rc-who">${avatar(id, 22)}${esc(TEAM[id]?.name || id)} <small class="muted">${esc(TEAM[id]?.short || "")}</small></span>`).join("")}</div>
+      ${e.why ? `<div class="rc-why">${esc(e.why)}</div>` : ""}
+      ${e.tasks?.length ? `<ol class="rc-tasks">${e.tasks.map((t) => `<li>${esc(TEAM[t.owner]?.name || t.owner)}: ${esc(t.title)}${t.files?.length ? ` <span class="muted">(${esc(t.files.join(", "))})</span>` : ""}</li>`).join("")}</ol>` : ""}`;
+    chat.append(div);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
   // ---------- work: tasks + documents ----------
   let tasks = [];
   function renderTasks() {
@@ -506,6 +532,7 @@
     if (!f) return;
     $("#fileHead").innerHTML = `${icon(fileIcon(p), 13)}<span>${esc(p)}</span><span>· v${f.version} · ${esc(TEAM[f.by]?.name || "ไฟล์เดิม")}</span>`;
     $("#fileBody").textContent = f.content;
+    $("#editFileBtn").hidden = !project;
     renderTree();
   }
   $("#fileTree").addEventListener("click", (e) => { const b = e.target.closest("[data-file]"); if (b) showFile(b.dataset.file); });
@@ -694,6 +721,11 @@
     $("#projectSub").textContent = project ? "ดูทีมทำงาน สั่งงานเพิ่ม หรือทำต่อจากรอบที่ค้างได้" : "ทีม AI ที่วิเคราะห์ เขียนโค้ด ทดสอบ รีวิว และแก้บั๊ก จนกว่างานจะผ่าน";
     $("#taskLabel").textContent = project ? `สั่งงานเพิ่มในโปรเจกต์นี้ (ทีมจะแก้ต่อจากไฟล์ล่าสุด)` : "งานจากลูกค้า";
     $("#nameField").hidden = Boolean(project);
+    $("#examples").hidden = Boolean(project);
+    $("#pickFileBtn").hidden = !project;
+    for (const b of document.querySelectorAll("#modeSeg button")) b.disabled = !project && b.dataset.mode !== "full";
+    if (!project) setMode("full", false); else if (!modeTouched) setMode("auto", false);
+    renderFocus();
     renderProjectNav();
   }
 
@@ -889,10 +921,14 @@
         $("#saveLocalBtn").hidden = false;
         $("#zipBtn").hidden = false;
         $("#zipBtn").href = `/api/projects/${encodeURIComponent(e.slug)}/project.zip`;
-        chatSys(e.resume ? "ทำงานต่อจากรอบที่ค้าง" : e.followUp ? `สั่งงานเพิ่ม: ${e.task}` : "เริ่มโปรเจกต์ใหม่", "", e.resume ? "Play" : e.followUp ? "MessageSquarePlus" : "FolderOpen");
+        if (e.resume) chatSys("ทำงานต่อจากรอบที่ค้าง", "", "Play");
+        else chatUser(e.task, e.by, e.mode, e.focus);
         break;
       case "init":
-        chatSys("ทีมรวมตัวที่ห้องประชุม", "", "Inbox");
+        break;
+      case "route":
+        routeCard(e);
+        await wait(600);
         break;
       case "phase": {
         phaseState[e.id] = { state: e.state, note: e.note };
@@ -926,7 +962,7 @@
         const to = e.to === "all" ? ORDER.filter((id) => id !== e.from) : e.to;
         await arrive([e.from]);
         office.say(e.from, e.text, nameList(e.to));
-        office.react(to, "nod");
+        office.react(to || [], "nod");
         chatMsg(e.from, e.to, e.text);
         await wait(Math.min(5000, 1500 + e.text.length * 26));
         break;
@@ -968,6 +1004,12 @@
         if (!office.fast) renderBudget(e);
         break;
       case "done":
+        if (e.answer) break;
+        if (e.quick) {
+          if (e.success) { office.react(e.changed?.length ? ["architect"] : [], "jump"); chatSys(`แก้เสร็จ · ${e.changed.length} ไฟล์`, "good", "CircleCheck"); }
+          refreshPreview(false);
+          break;
+        }
         await arrive(["pm"]);
         if (e.success) {
           if (!office.fast) office.confetti();
@@ -1021,7 +1063,7 @@
     }
   }
 
-  function resetView() {
+  function resetView(keepChat = false) {
     for (const o of [phaseState, docs, files, streams]) for (const k of Object.keys(o)) delete o[k];
     tasks = []; rounds.length = 0; currentDoc = null; currentFile = null;
     renderPipeline(); renderDocs(); renderTree();
@@ -1033,7 +1075,7 @@
     $("#reloadPreview").disabled = true;
     $("#previewInfo").textContent = "ลิงก์เดโม่จะใช้ได้เมื่อทีมสร้างไฟล์ HTML";
     $("#previewFrame").removeAttribute("src");
-    chat.innerHTML = "";
+    if (!keepChat) chat.innerHTML = "";
     office.lab("idle");
     office.boardDone(false);
     ORDER.forEach((id) => { office.setStatus(id, "idle"); setMember(id, "idle"); });
@@ -1074,9 +1116,11 @@
     try {
       const data = await api("/api/jobs", {
         task, files: attached, projectSlug: followUp || undefined,
+        mode: followUp ? mode : "full", focus: followUp ? [...focus] : [],
         projectName: followUp ? undefined : $("#projectName").value.trim(), ...llmBody(),
       });
-      resetView();
+      resetView(Boolean(followUp));
+      focus.clear(); renderFocus();
       attached = []; $("#attachInfo").textContent = "";
       const meta = await api(`/api/projects/${encodeURIComponent(data.slug)}`);
       project = { slug: data.slug, name: meta.name || data.slug, demoPath: meta.demoPath };
@@ -1090,6 +1134,65 @@
       chatSys(err.message, "bad", "OctagonAlert");
     }
   });
+
+  // ---------- chat controls: how much of the team, which files ----------
+  let mode = "auto", modeTouched = false;
+  const focus = new Set();
+  const MODE_HINT = {
+    auto: "Archie อ่านข้อความแล้วเลือกเองว่าต้องใช้ใคร",
+    quick: "ใช้เฉพาะคนที่จำเป็น แก้เฉพาะส่วนที่บอก",
+    full: "ทั้งทีม ตั้งแต่ requirement จนส่งมอบ",
+  };
+  function setMode(m, byUser = true) {
+    mode = m;
+    if (byUser) modeTouched = true;
+    for (const b of document.querySelectorAll("#modeSeg button")) b.classList.toggle("on", b.dataset.mode === m);
+    $("#modeHint").textContent = project ? MODE_HINT[m] : "โปรเจกต์ใหม่ ทีมทำทั้งโครงให้";
+  }
+  $("#modeSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mode]");
+    if (b && !b.disabled) setMode(b.dataset.mode);
+  });
+  function renderFocus() {
+    const box = $("#focusChips");
+    box.hidden = !focus.size || !project;
+    box.innerHTML = focus.size ? `<span>ไฟล์ที่จะแก้:</span>${[...focus].map((p) => `<span class="focus-chip">${esc(p)}<button type="button" data-unfocus="${esc(p)}" aria-label="เอาออก">${icon("X", 12)}</button></span>`).join("")}` : "";
+  }
+  function addFocus(p) {
+    focus.add(p);
+    if (mode !== "quick") setMode("quick");
+    renderFocus();
+  }
+  $("#focusChips").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-unfocus]");
+    if (b) { focus.delete(b.dataset.unfocus); renderFocus(); }
+  });
+  $("#editFileBtn").addEventListener("click", () => {
+    if (!currentFile) return;
+    addFocus(currentFile);
+    $(".tab[data-tab=chat]").click();
+    $("#task").focus();
+  });
+  function renderPick() {
+    const q = $("#pickFilter").value.trim().toLowerCase();
+    const list = Object.keys(files).filter((p) => !/^(data|\.agent-office)\//.test(p) && p.toLowerCase().includes(q)).sort();
+    $("#pickList").innerHTML = list.length
+      ? list.map((p) => `<label><input type="checkbox" data-pick="${esc(p)}" ${focus.has(p) ? "checked" : ""}>${icon(fileIcon(p), 13)}${esc(p)}</label>`).join("")
+      : `<p class="muted small">ยังไม่มีไฟล์ในโปรเจกต์นี้</p>`;
+  }
+  $("#pickFileBtn").addEventListener("click", () => { $("#pickFilter").value = ""; renderPick(); $("#pickFile").showModal(); });
+  $("#pickFilter").addEventListener("input", renderPick);
+  $("#pickList").addEventListener("change", (e) => {
+    const b = e.target.closest("[data-pick]");
+    if (!b) return;
+    if (b.checked) addFocus(b.dataset.pick); else { focus.delete(b.dataset.pick); renderFocus(); }
+  });
+  // Enter sends, Shift+Enter makes a new line (not while typing Thai with an IME).
+  $("#task").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#taskForm").requestSubmit(); }
+  });
+  $("#task").addEventListener("input", () => { const t = $("#task"); t.style.height = "auto"; t.style.height = Math.min(200, t.scrollHeight) + "px"; });
+  setMode("full", false);
 
   $("#cancelBtn").addEventListener("click", () => { if (jobId) fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" }); });
 

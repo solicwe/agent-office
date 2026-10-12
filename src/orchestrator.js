@@ -1,10 +1,13 @@
-// The office manager: drives the team through
-// analyze -> plan -> build (parallel tasks) -> tests -> run -> (debug -> fix -> run)* -> review -> sign-off,
-// emitting events the browser turns into walking, talking characters.
+// The office manager. Two ways of working:
+// - full: analyze -> plan -> build (parallel tasks) -> tests -> run -> (debug -> fix -> run)* -> review -> sign-off
+// - quick: Archie reads the message, picks only the people needed, and they change just that part
+//   (then tests, the debug loop and, when chosen, review), or Archie simply answers.
+// Events become walking, talking characters in the browser.
 import { AGENTS, PROMPTS, systemPrompt } from "./agents.js";
 import { runProject, formatReport, isTestFile } from "./runner.js";
 import { parseFiles } from "./workspace.js";
 import { KIT_FILES, isLockedKitFile } from "./kit.js";
+import { posix } from "node:path";
 
 const ENGINEERS = ["frontend", "backend"];
 const RETRIES = 1; // extra attempts per agent turn for transient failures
@@ -35,11 +38,13 @@ export async function runJob({ input, llm, emit, signal, settings = {} }) {
   const move = (agent, to) => emit({ type: "move", agent, to });
   const say = (from, to, text) => text && emit({ type: "say", from, to, text });
   const doc = (name, content, by) => emit({ type: "doc", name, content, by });
+  const changed = new Set();
   const putFiles = (list, by) => {
     for (const f of list) {
       if (/^data\//.test(f.path)) continue; // the live app's database is never written by agents
       if (by !== "kit" && isLockedKitFile(f.path) && files[f.path] != null) continue; // keep the kit intact
       files[f.path] = f.content;
+      if (by !== "kit") changed.add(f.path);
       emit({ type: "file", path: f.path, content: f.content, by: by === "kit" ? "architect" : by });
     }
   };
@@ -88,18 +93,21 @@ export async function runJob({ input, llm, emit, signal, settings = {} }) {
    * Build one task. A cut-off answer keeps the complete files and asks again only
    * for the files that are still missing, so big pages never sink the job.
    */
-  async function buildTask(t, focus) {
-    const key = `implement:${t.id}`;
+  async function buildTask(t, focus, step = "implement") {
+    const key = `${step}:${t.id}`;
     const produced = [];
-    let res = await askFull(t.owner, "implement", { task: t, focus }, key);
+    const forTask = step === "edit" ? { quickTask: t } : { task: t };
+    let res = await askFull(t.owner, step, { ...forTask, focus }, key);
     for (let round = 1; ; round++) {
       const got = parseFiles(res.text, { dropUnclosed: res.truncated });
       putFiles(got, t.owner);
       produced.push(...got);
       const missing = t.files.filter((f) => !produced.some((p) => p.path === f));
-      if (!missing.length || round > MORE_ROUNDS) return { produced, missing, say: tag(res.text, "say") };
+      // A focused edit need not touch every listed file; only a cut-off answer is asked to go on.
+      const enough = !missing.length || round > MORE_ROUNDS || (step === "edit" && !res.truncated);
+      if (enough) return { produced, missing: step === "edit" ? [] : missing, say: tag(res.text, "say") };
       emit({ type: "notice", agent: t.owner, message: `${AGENTS[t.owner].name} เขียนต่ออีก ${missing.length} ไฟล์: ${missing.join(", ")}` });
-      res = await askFull(t.owner, "implement", { task: t, focus: [...focus, ...produced.map((p) => p.path)], only: missing }, `${key}:more${round}`);
+      res = await askFull(t.owner, step, { ...forTask, focus: [...focus, ...produced.map((p) => p.path)], only: missing }, `${key}:more${round}`);
     }
   }
 
@@ -116,21 +124,36 @@ export async function runJob({ input, llm, emit, signal, settings = {} }) {
     return result;
   }
 
-  function filesMentioned(result) {
-    const text = result.results.filter((r) => !r.ok).map((r) => `${r.name} ${r.error}`).join("\n");
-    return Object.keys(files).filter((p) => text.includes(p) || isTestFile(p));
+  function filesMentioned(result, extraText = "") {
+    const text = result.results.filter((r) => !r.ok && !knownBad.has(r.name)).map((r) => `${r.name} ${r.error}`).join("\n") + "\n" + extraText;
+    const base = (p) => p.split("/").pop();
+    const hit = new Set(Object.keys(files).filter((p) => text.includes(p) || (base(p).length > 5 && text.includes(base(p)))));
+    // The modules a failing test loads, so nobody has to rewrite one from guesswork.
+    for (const p of [...hit]) {
+      if (!isTestFile(p)) continue;
+      for (const m of files[p].matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)) {
+        if (!m[1].startsWith(".")) continue;
+        const r = posix.normalize(posix.join(posix.dirname(p), m[1]));
+        for (const c of [r, r + ".js"]) if (files[c] != null) hit.add(c);
+      }
+    }
+    return [...hit];
   }
+  // Tests that already failed before a quick change: not this change's job.
+  let knownBad = new Set();
+  const green = (r) => r.results.every((x) => x.ok || knownBad.has(x.name));
 
-  async function testUntilGreen() {
+  async function testUntilGreen(limit = maxFix) {
     let result = await runChecks();
-    while (!result.ok && fixRound < maxFix) {
+    while (!green(result) && fixRound < limit) {
       fixRound++;
-      phase("debug", "active", `รอบแก้ ${fixRound}/${maxFix}`);
+      phase("debug", "active", `รอบแก้ ${fixRound}/${limit}`);
       say("qa", ["debugger"], `Max ช่วยดูหน่อยค่ะ ไม่ผ่าน ${result.failed} จาก ${result.total} รายการ`);
       move("debugger", "lab");
       const focus = filesMentioned(result);
-      const dbg = await ask("debugger", "debug", { focus }, `debug:${fixRound}`);
+      const dbg = await ask("debugger", "debug", { focus, known: [...knownBad] }, `debug:${fixRound}`);
       ctx.analysis = tag(dbg, "analysis");
+      const fixFocus = filesMentioned(result, ctx.analysis);
       doc("debug", ctx.analysis, "debugger");
       let owners = tag(dbg, "assign").toLowerCase().split(/[\s,]+/).filter((o) => ["frontend", "backend", "qa"].includes(o));
       if (!owners.length) owners = ["backend"];
@@ -141,7 +164,7 @@ export async function runJob({ input, llm, emit, signal, settings = {} }) {
 
       await Promise.all(owners.map(async (owner) => {
         try {
-          const fix = await askFull(owner, "fix", { owner, focus }, `fix:${owner}:${fixRound}`);
+          const fix = await askFull(owner, "fix", { owner, focus: fixFocus }, `fix:${owner}:${fixRound}`);
           const changed = parseFiles(fix.text, { dropUnclosed: fix.truncated });
           putFiles(changed, owner);
           say(owner, ["debugger"], tag(fix.text, "say") || `แก้ ${changed.length} ไฟล์แล้ว`);
@@ -157,10 +180,124 @@ export async function runJob({ input, llm, emit, signal, settings = {} }) {
     return result;
   }
 
+  /** Archie reads the message and picks the mode, the helpers and the work. */
+  async function decideRoute(wantedMode) {
+    phase("kickoff", "active", "เลือกคนที่ต้องใช้");
+    move("architect", "board");
+    const r = await ask("architect", "route", { history: input.history || "", wanted: wantedMode, focusFiles: input.focus || [] }, "route");
+    let mode = tag(r, "mode").trim().toLowerCase();
+    if (!["answer", "quick", "full"].includes(mode)) mode = "quick";
+    if (wantedMode === "quick" && mode === "full") mode = "quick";
+    const tasks = mode === "quick"
+      ? parsePlan(tag(r, "work")).slice(0, 4).map((t, i) => ({ ...t, id: `Q${i + 1}`, files: t.files.filter((f) => !isLockedKitFile(f) && f !== "public/js/api.js") }))
+      : [];
+    const helpers = tag(r, "team").toLowerCase().split(/[\s,]+/).filter((x) => ["frontend", "backend", "qa", "reviewer"].includes(x));
+    const team = [...new Set(["architect", ...helpers, ...tasks.map((t) => t.owner)])];
+    const route = { mode, tasks, team, reply: tag(r, "reply"), why: tag(r, "why") };
+    emit({ type: "route", mode, team, why: route.why, tasks: tasks.map((t) => ({ id: t.id, owner: t.owner, title: t.title, files: t.files })) });
+    say("architect", mode === "answer" ? null : team.filter((x) => x !== "architect"), tag(r, "say"));
+    phase("kickoff", "done", mode === "answer" ? "ตอบคำถาม" : mode === "quick" ? `ใช้ ${team.length} คน` : "ทั้งทีม");
+    move("architect", "desk");
+    return route;
+  }
+
+  function answerOnly(route) {
+    say("architect", null, route.reply || "รับทราบครับ");
+    emit({ type: "done", success: true, answer: true, fixRounds: 0, fileCount: Object.keys(files).length, preview: hasPage(files) });
+    return { success: true, files };
+  }
+
+  /** Only the chosen people work, on only the part that changes. */
+  async function runQuick(route) {
+    if (route.reply) say("architect", null, route.reply);
+    const fallbackOwner = route.team.includes("backend") && !route.team.includes("frontend") ? "backend" : "frontend";
+    const tasks = route.tasks.length
+      ? route.tasks
+      : [{ id: "Q1", title: "แก้ตามที่ขอ", owner: fallbackOwner, files: input.focus || [], depends: [], details: ctx.task }];
+    emit({ type: "tasks", tasks });
+    phase("analyze", "done", "ข้าม (แก้เฉพาะส่วน)");
+    phase("plan", "done", `${tasks.length} งาน`);
+
+    // What already fails before the change (free: no AI involved).
+    try {
+      const before = await runProject(files);
+      knownBad = new Set(before.results.filter((r) => !r.ok).map((r) => r.name));
+      if (knownBad.size) emit({ type: "notice", agent: "qa", message: `ก่อนแก้มีเทสต์ไม่ผ่านอยู่แล้ว ${knownBad.size} รายการ ทีมจะไม่ไปแก้ส่วนนั้น ดูแค่ว่างานนี้ทำอะไรพังไหม` });
+    } catch { knownBad = new Set(); }
+
+    phase("build", "active");
+    const failed = [];
+    // Different people work in parallel; each does their own tasks one by one.
+    await Promise.all(ENGINEERS.map(async (owner) => {
+      for (const t of tasks.filter((x) => x.owner === owner)) {
+        move(owner, "desk");
+        emit({ type: "task", id: t.id, state: "active" });
+        try {
+          const out = await buildTask(t, [...t.files, ...(input.focus || [])], "edit");
+          const ok = out.produced.length > 0;
+          emit({ type: "task", id: t.id, state: ok ? "done" : "failed" });
+          say(owner, ["architect"], out.say || (ok ? `${t.id} เสร็จแล้ว` : `${t.id} ยังไม่มีไฟล์ที่แก้`));
+          if (!ok) failed.push(t.id);
+        } catch (err) {
+          if (isFatal(err)) throw err;
+          emit({ type: "task", id: t.id, state: "failed" });
+          emit({ type: "notice", agent: owner, message: `${t.id} ไม่สำเร็จ: ${err.message}` });
+          failed.push(t.id);
+        }
+      }
+    }));
+    phase("build", failed.length ? "failed" : "done", `แก้ ${changed.size} ไฟล์`);
+
+    if (route.team.includes("qa") && changed.size) {
+      phase("tests", "active");
+      const t = await askFull("qa", "quickTests", { changed: [...changed] });
+      putFiles(parseFiles(t.text, { dropUnclosed: t.truncated }).filter((f) => isTestFile(f.path)), "qa");
+      say("qa", ["architect"], tag(t.text, "say"));
+      phase("tests", "done");
+    } else {
+      phase("tests", "done", "ใช้เทสต์เดิม");
+    }
+
+    const result = await testUntilGreen(Math.min(maxFix, 3));
+
+    if (route.team.includes("reviewer") && green(result)) {
+      phase("review", "active");
+      const r = await ask("reviewer", "review", {}, "review:quick");
+      ctx.review = tag(r, "review");
+      doc("review", ctx.review, "reviewer");
+      say("reviewer", ["architect"], tag(r, "say"));
+      const ok = !/CHANGES/i.test(tag(r, "verdict"));
+      phase("review", ok ? "done" : "failed", ok ? "อนุมัติ" : "มีข้อสังเกต");
+    } else {
+      phase("review", "done", route.team.includes("reviewer") ? "ข้าม เพราะยังไม่ผ่าน" : "ไม่ต้องใช้");
+    }
+
+    const success = green(result) && !failed.length && changed.size > 0;
+    phase("signoff", success ? "done" : "failed");
+    const list = [...changed].slice(0, 8).join(", ");
+    const old = result.results.filter((x) => !x.ok && knownBad.has(x.name)).length;
+    say("architect", null, success
+      ? `เรียบร้อยครับ แก้ ${changed.size} ไฟล์ (${list}) เทสต์ผ่าน ${result.passed}/${result.total}${old ? ` ส่วนอีก ${old} รายการพังอยู่ก่อนแล้ว ไม่เกี่ยวกับงานนี้ ถ้าอยากให้แก้ บอกได้เลยครับ` : ""}`
+      : changed.size
+        ? `แก้ ${changed.size} ไฟล์แล้ว (${list}) แต่ยังไม่ผ่านทั้งหมด ${result.passed}/${result.total} ดูผลในแท็บเทสต์ แล้วพิมพ์บอกต่อได้เลยครับ`
+        : "รอบนี้ยังไม่ได้แก้ไฟล์ไหนเลยครับ ลองบอกรายละเอียดเพิ่ม หรือชี้ไฟล์ที่ต้องการให้แก้");
+    emit({ type: "done", success, quick: true, fixRounds: fixRound, fileCount: Object.keys(files).length, changed: [...changed], preview: hasPage(files) });
+    return { success, files };
+  }
+
   // ---- Kick-off ------------------------------------------------------------
   const resume = input.resume;
   emit({ type: "init", agents: AGENTS, task: ctx.task, maxFixRounds: maxFix, existing: Object.keys(files), resume: Boolean(resume) });
   if (Object.keys(files).length) for (const [p, c] of Object.entries(files)) emit({ type: "file", path: p, content: c, by: "client" });
+
+  // ---- Who is needed? (an existing project, unless the user asked for the whole team) ----
+  const wanted = ["full", "quick"].includes(input.mode) ? input.mode : "auto";
+  if (!resume && wanted !== "full" && Object.keys(files).length) {
+    const route = await decideRoute(wanted);
+    if (route.mode === "answer") return answerOnly(route);
+    if (route.mode === "quick") return runQuick(route);
+    say("architect", "all", "งานนี้ใหญ่ ขอเรียกทั้งทีมทำแบบเต็มครับ");
+  }
   phase("kickoff", "active");
   for (const id of Object.keys(AGENTS)) move(id, "meeting");
   say("pm", "all", resume
@@ -350,7 +487,7 @@ export function tag(text, name) {
   if (m) return m[1].trim();
   const open = text.search(new RegExp(`<${name}>`, "i"));
   if (open === -1) return "";
-  return text.slice(open + name.length + 2).split(/<\/?(?:say|spec|design|plan|assign|analysis|verdict|review|summary|frontend|backend|file)\b/i)[0].trim();
+  return text.slice(open + name.length + 2).split(/<\/?(?:say|spec|design|plan|assign|analysis|verdict|review|summary|frontend|backend|file|mode|reply|team|why|work)\b/i)[0].trim();
 }
 
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, Number(n) || lo));

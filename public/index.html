@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20">
+  <link rel="stylesheet" href="style.css?v=21">
   <script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
@@ -57,34 +57,6 @@
       </span>
     </div>
 
-    <section class="composer">
-      <form id="taskForm">
-        <div class="composer-head">
-          <label for="task" class="label" id="taskLabel">งานจากลูกค้า</label>
-          <button type="button" id="briefBtn" class="btn small ghost"><i data-icon="MessageCircleQuestion"></i>ไม่รู้จะสั่งอะไร? ให้ช่วยถาม</button>
-        </div>
-        <textarea id="task" rows="3" placeholder="อธิบายงานที่ต้องการ เช่น สร้างเว็บไซต์ร้านค้าออนไลน์ขายเสื้อผ้า มีหน้ารวมสินค้า ค้นหา ตะกร้า และหน้าชำระเงิน"></textarea>
-        <div class="examples" id="examples"></div>
-        <div class="composer-row">
-          <label class="name-field" id="nameField" title="ชื่อโฟลเดอร์ที่จะบันทึกโปรเจกต์ และใช้เป็นลิงก์เดโม่">
-            <i data-icon="FolderPen"></i>
-            <input id="projectName" placeholder="ชื่อโปรเจกต์ (ไม่บังคับ)" maxlength="48" autocomplete="off">
-          </label>
-          <label class="file-btn" title="แนบไฟล์โปรเจกต์เดิมให้ทีมแก้ไข">
-            <i data-icon="Paperclip"></i><span>แนบไฟล์</span>
-            <input type="file" id="fileInput" multiple hidden>
-          </label>
-          <label class="file-btn" title="แนบทั้งโฟลเดอร์">
-            <i data-icon="FolderUp"></i><span>แนบโฟลเดอร์</span>
-            <input type="file" id="folderInput" webkitdirectory multiple hidden>
-          </label>
-          <span id="attachInfo" class="muted small"></span>
-          <span class="spacer"></span>
-          <button type="button" id="cancelBtn" class="btn ghost" hidden><i data-icon="Square"></i>หยุดงาน</button>
-          <button type="submit" id="startBtn" class="btn primary"><i data-icon="Send"></i><span>มอบหมายงาน</span></button>
-        </div>
-      </form>
-    </section>
 
     <ol id="pipeline" class="pipeline" aria-label="ขั้นตอนการทำงาน"></ol>
 
@@ -105,7 +77,42 @@
         </nav>
 
         <div class="panel active" id="panel-chat">
-          <div id="chat" class="chat"><div class="empty">ยังไม่มีงาน<br>พิมพ์งานด้านบน หรือกด “ให้ช่วยถาม” ถ้ายังไม่แน่ใจ</div></div>
+          <div id="chat" class="chat"><div class="empty">คุยกับทีมได้เลย<br>บอกว่าอยากได้เว็บแบบไหน หรืออยากแก้ส่วนไหน ทีมจะเลือกเองว่าต้องใช้ใครบ้าง</div></div>
+          <form id="taskForm" class="chat-input">
+            <div class="mode-row">
+              <div class="mode-seg" id="modeSeg" role="radiogroup" aria-label="วิธีทำงาน">
+                <button type="button" data-mode="auto" class="on" title="Archie อ่านข้อความแล้วเลือกเองว่าต้องใช้ใครบ้าง"><i data-icon="Sparkles"></i>ทีมเลือกเอง</button>
+                <button type="button" data-mode="quick" title="แก้หรือเพิ่มเฉพาะส่วน ใช้เฉพาะคนที่จำเป็น"><i data-icon="PencilLine"></i>แก้เฉพาะส่วน</button>
+                <button type="button" data-mode="full" title="ทั้งทีม ตั้งแต่ requirement ออกแบบ เขียนโค้ด เทสต์ จนส่งมอบ"><i data-icon="Layers"></i>ทำทั้งโครง</button>
+              </div>
+              <button type="button" id="briefBtn" class="btn small ghost"><i data-icon="MessageCircleQuestion"></i>ช่วยคิด</button>
+            </div>
+            <span id="taskLabel" class="sr-only">ข้อความถึงทีม</span>
+            <div id="focusChips" class="focus-chips" hidden></div>
+            <div class="examples" id="examples"></div>
+            <div class="input-box">
+              <textarea id="task" rows="2" aria-labelledby="taskLabel" placeholder="พิมพ์คุยกับทีม เช่น สร้างเว็บร้านค้าออนไลน์ หรือ ปุ่มสั่งซื้อในหน้าตะกร้ากดไม่ได้"></textarea>
+              <button type="button" id="cancelBtn" class="btn icon-only ghost" hidden title="หยุดงาน" aria-label="หยุดงาน"><i data-icon="Square"></i></button>
+              <button type="submit" id="startBtn" class="btn primary icon-send" title="ส่ง (Enter)" aria-label="ส่ง"><i data-icon="Send"></i><span class="sr-only">ส่ง</span></button>
+            </div>
+            <div class="composer-row">
+              <label class="name-field" id="nameField" title="ชื่อโฟลเดอร์ที่จะบันทึกโปรเจกต์ และใช้เป็นลิงก์เดโม่">
+                <i data-icon="FolderPen"></i>
+                <input id="projectName" placeholder="ชื่อโปรเจกต์ (ไม่บังคับ)" maxlength="48" autocomplete="off">
+              </label>
+              <label class="file-btn" title="แนบไฟล์โปรเจกต์เดิมให้ทีมแก้ไข">
+                <i data-icon="Paperclip"></i><span>แนบไฟล์</span>
+                <input type="file" id="fileInput" multiple hidden>
+              </label>
+              <label class="file-btn" title="แนบทั้งโฟลเดอร์">
+                <i data-icon="FolderUp"></i><span>โฟลเดอร์</span>
+                <input type="file" id="folderInput" webkitdirectory multiple hidden>
+              </label>
+              <button type="button" id="pickFileBtn" class="file-btn as-btn" hidden title="เลือกไฟล์ในโปรเจกต์ที่อยากให้แก้"><i data-icon="FileCode"></i><span>เลือกไฟล์ที่จะแก้</span></button>
+              <span id="attachInfo" class="muted small"></span>
+              <span id="modeHint" class="muted small push"></span>
+            </div>
+          </form>
         </div>
 
         <div class="panel" id="panel-work">
@@ -129,7 +136,7 @@
           <div class="files">
             <ul id="fileTree" class="file-tree"></ul>
             <div class="file-view">
-              <div class="file-head"><span id="fileHead" class="file-name"></span><button type="button" id="wrapToggle" class="btn small ghost" title="สลับการตัดบรรทัด"><i data-icon="WrapText"></i></button></div>
+              <div class="file-head"><span id="fileHead" class="file-name"></span><button type="button" id="editFileBtn" class="btn small ghost" hidden title="ให้ทีมแก้เฉพาะไฟล์นี้"><i data-icon="PencilLine"></i>แก้ไฟล์นี้</button><button type="button" id="wrapToggle" class="btn small ghost" title="สลับการตัดบรรทัด"><i data-icon="WrapText"></i></button></div>
               <pre id="fileBody" class="code wrap"></pre>
             </div>
           </div>
@@ -272,6 +279,18 @@
     </form>
   </dialog>
 
+  <dialog id="pickFile" class="dialog">
+    <form method="dialog" novalidate>
+      <header class="dialog-head">
+        <h2><i data-icon="FileCode"></i>เลือกไฟล์ที่จะให้แก้</h2>
+        <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
+      </header>
+      <input id="pickFilter" placeholder="ค้นหาไฟล์" autocomplete="off">
+      <div id="pickList" class="pick-list"></div>
+      <footer class="dialog-foot"><button value="done" class="btn primary">เสร็จ</button></footer>
+    </form>
+  </dialog>
+
   <dialog id="settings" class="dialog">
     <form method="dialog" novalidate id="settingsForm">
       <header class="dialog-head">
@@ -335,8 +354,8 @@
     </form>
   </dialog>
 
-  <script src="icons.js?v=20"></script>
-  <script src="office.js?v=20"></script>
-  <script src="app.js?v=20"></script>
+  <script src="icons.js?v=21"></script>
+  <script src="office.js?v=21"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>

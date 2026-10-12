@@ -322,13 +322,19 @@ app.post("/api/jobs", async (req, res) => {
   if (existingSlug && !(await canAccessProject(user, existingSlug))) return res.status(403).json({ error: "ไม่มีสิทธิ์ในโปรเจกต์นี้" });
 
   // "Continue where it stopped": rebuild the spec, design and task list from the old job's log.
+  // How much of the team: "auto" (Archie decides), "full" (whole pipeline) or "quick" (only part).
+  let mode = ["auto", "full", "quick"].includes(body.mode) ? body.mode : "auto";
+  const focus = (Array.isArray(body.focus) ? body.focus : []).map((p) => safePath(String(p || ""))).filter(Boolean).slice(0, 20);
   let resume;
   if (body.resumeJobId && existingSlug) {
     const old = await readJobEvents(existingSlug, String(body.resumeJobId)).catch(() => null);
     if (!old) return res.status(404).json({ error: "ไม่พบประวัติงานที่จะทำต่อ" });
-    task = old.find((e) => e.type === "project")?.task || task;
+    const first = old.find((e) => e.type === "project");
+    task = first?.task || task;
     const tasksEvt = [...old].reverse().find((e) => e.type === "tasks");
-    if (tasksEvt) {
+    // A stopped quick change is simply done again on the latest files.
+    if (first?.mode === "quick" || old.some((e) => e.type === "route" && e.mode !== "full")) mode = "quick";
+    else if (tasksEvt) {
       const lastState = {};
       for (const e of old) if (e.type === "task") lastState[e.id] = e.state;
       const lastDoc = (name) => [...old].reverse().find((e) => e.type === "doc" && e.name === name)?.content || "";
@@ -363,7 +369,7 @@ app.post("/api/jobs", async (req, res) => {
       const name = String(body.projectName || "").trim() || guessName(task);
       project = await createProject(name, { task, owner: user.id, ownerName: user.name });
     }
-    await recordJob(project.slug, { id, task, status: "running", createdAt: new Date().toISOString(), model: llm.model, by: user.name, resumeOf: resume ? String(body.resumeJobId) : undefined });
+    await recordJob(project.slug, { id, task, mode, status: "running", createdAt: new Date().toISOString(), model: llm.model, by: user.name, resumeOf: resume ? String(body.resumeJobId) : undefined });
   } catch (err) {
     return res.status(500).json({ error: `สร้างโฟลเดอร์โปรเจกต์ไม่ได้: ${err.message}` });
   }
@@ -412,10 +418,10 @@ app.post("/api/jobs", async (req, res) => {
   const base = llm instanceof FallbackLLM ? llm.current : llm;
   emit({ type: "mode", model: llm.model, effort: llm.effort, via: base instanceof LocalClaudeLLM ? "local" : base instanceof SwuLLM ? "swu" : "api", ownKey: Boolean(llm.onOwnKey) });
   const meta = await readMeta(project.slug);
-  emit({ type: "project", slug: project.slug, name: meta?.name || project.slug, jobId: id, followUp: Boolean(existingSlug), resume: Boolean(resume), task, demoPath: `/p/${encodeURIComponent(project.slug)}/` });
+  emit({ type: "project", slug: project.slug, name: meta?.name || project.slug, jobId: id, followUp: Boolean(existingSlug), resume: Boolean(resume), task, mode, focus, by: user.name, demoPath: `/p/${encodeURIComponent(project.slug)}/` });
   let outcome = { status: "failed" };
   runJob({
-    input: { task, files, resume },
+    input: { task, files, resume, mode, focus, history: (meta?.jobs || []).filter((j) => j.id !== id).slice(-6).map((j) => `- ${j.by || ""}: ${String(j.task || "").slice(0, 300)} (${j.status})`).join("\n") },
     llm,
     emit,
     signal: job.abort.signal,

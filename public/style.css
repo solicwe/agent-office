@@ -439,3 +439,43 @@ html, body { max-width: 100%; overflow-x: clip; }
 /* ---------- live app preview + owner sign-in ---------- */
 .app-log { flex: 0 0 auto; max-height: 160px; margin: 8px 10px 0; border-radius: 8px; white-space: pre-wrap; }
 .owner-form { width: 100%; display: flex; flex-direction: column; gap: 8px; text-align: left; margin-top: 8px; }
+
+/* ---------- chat-style input ---------- */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.side { height: min(86vh, 900px); }
+.chat-input { border-top: 1px solid var(--line); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--surface); }
+.chat-input .examples { margin-top: 0; }
+.mode-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mode-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; }
+.mode-seg button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; padding: 5px 11px; border-radius: 999px; cursor: pointer; }
+.mode-seg button:hover { color: var(--ink); }
+.mode-seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.mode-seg button:disabled { opacity: .45; cursor: not-allowed; }
+.input-box { display: flex; align-items: flex-end; gap: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); padding: 6px 6px 6px 12px; }
+.input-box:focus-within { border-color: var(--accent); }
+.input-box textarea { flex: 1; border: 0; background: transparent; resize: none; min-height: 44px; max-height: 200px; padding: 8px 0; }
+.input-box textarea:focus { outline: none; }
+.icon-send { border-radius: 10px; padding: 9px 11px; }
+.file-btn.as-btn { border: 0; background: transparent; font: inherit; font-size: 13px; }
+.focus-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.focus-chips > span:first-child { font-size: 12px; color: var(--muted); }
+.focus-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-family: "IBM Plex Mono", monospace; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 4px 2px 9px; }
+.focus-chip button { display: inline-flex; border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 2px; }
+/* The sender's own messages, like any chat app. */
+.msg.me { flex-direction: row-reverse; }
+.msg.me .body { display: flex; flex-direction: column; align-items: flex-end; }
+.msg.me .text { background: var(--accent); color: var(--accent-ink); border-color: transparent; border-radius: 10px 2px 10px 10px; max-width: 88%; }
+.msg.me .me-ava { width: 32px; height: 32px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); }
+.msg .tag-mode { display: inline-block; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; margin-left: 4px; }
+/* Archie's choice of team. */
+.route-card { border: 1px solid var(--line); background: var(--surface-2); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.route-card .rc-head { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.route-card .rc-team { display: flex; flex-wrap: wrap; gap: 6px; }
+.route-card .rc-who { display: inline-flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px 2px 2px; font-size: 12.5px; }
+.route-card .rc-why { white-space: pre-wrap; color: var(--muted); font-size: 12.5px; }
+.route-card .rc-tasks { margin: 0; padding-left: 18px; font-size: 12.5px; }
+.pick-list { max-height: 50vh; overflow: auto; display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.dialog .pick-list label { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; font-family: "IBM Plex Mono", monospace; font-size: 12.5px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.dialog .pick-list label:hover { background: var(--surface-2); }
+.pick-list input { width: auto; }
+@media (max-width: 640px) { .side { height: 82vh; } .mode-seg button { padding: 5px 8px; } }

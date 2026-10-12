@@ -5,8 +5,10 @@ import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createServer } from "node:net";
 
-const PORT = 3000 + Math.floor(Math.random() * 2000) + 1000;
+// A port the OS says is free right now (a random pick could hit a running app).
+const PORT = await new Promise((resolve) => { const s = createServer().listen(0, () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 const BASE = `http://127.0.0.1:${PORT}`;
 let dir, server;
 

@@ -66,7 +66,48 @@ export function systemPrompt(agentId) {
 
 const block = (label, body) => `<${label}>\n${body || "(none)"}\n</${label}>`;
 
+const MODE_RULES = `Modes:
+- answer: a question, idea or discussion that needs no file change. Answer it yourself in <reply>.
+- quick: a focused change to part of an existing project: fix a bug, change a page, add or change one feature, styling, texts. Only the people who are needed work on it; nothing else is rewritten.
+- full: a large new set of features or a rebuild that needs a new spec, design and the whole team.`;
+
 export const PROMPTS = {
+  route: ({ task, files, history, wanted, focusFiles }) => `A message arrived in the project chat (from the client or a teammate who joined the project).
+${block("message", task)}
+${block("recent_requests_in_this_project", history)}
+${focusFiles?.length ? `The sender pointed at these files: ${focusFiles.join(", ")}
+` : ""}${block("project_files", digest(files, focusFiles || [], 20_000))}
+${wanted === "quick" ? "The sender chose \"edit only part\": use mode quick, or answer when they only ask a question. Never full." : "Decide how much of the team this needs; prefer the smallest team that does the job well."}
+${MODE_RULES}
+You are Archie and you lead this. Choose helpers only when they are really needed: frontend (Mia) for pages, styles and UI scripts; backend (Ben) for API routes, data, logic and server.js; qa (Tessa) when behaviour changes and tests should be added or updated; reviewer (Rex) for risky changes (login, permissions, money, data). Max (debugger) joins on his own when tests fail.
+Output:
+<say>Thai, to the team: what this is and who works on it</say>
+<mode>answer | quick | full</mode>
+<reply>Thai, to the sender: the answer (answer mode), or one or two sentences on what the team will change</reply>
+<team>comma-separated helpers: frontend, backend, qa, reviewer (may be empty)</team>
+<why>Thai: one short line per chosen helper saying why, and one line saying why the others are not needed</why>
+<work>quick mode only, JSON: {"tasks":[{"id":"Q1","title":"…","owner":"frontend"|"backend","files":["path", …],"details":"exactly what to change"}]} with 1-4 tasks; files = the files to change or create; never server/lib/* or public/js/api.js</work>`,
+
+  edit: ({ task, files, reply, focus, only, quickTask }) => `A focused change in an existing project. Change only what this task needs; every other behaviour must keep working.
+${block("request", task)}
+${block("plan_from_archie", reply)}
+${block("project_files", digest(files, focus, 30_000))}
+Your task ${quickTask.id}: ${quickTask.title}
+${quickTask.details || ""}
+Files for this task: ${quickTask.files.join(", ") || "(choose the right ones)"}
+${only ? `Your previous answer was cut off. Write ONLY these files now: ${only.join(", ")}.
+` : ""}Output:
+<say>…</say>
+then one <file path="…">…</file> (full contents) for each file you change or create. Do not output unchanged files.`,
+
+  quickTests: ({ task, files, changed }) => `The team just made a focused change.
+${block("request", task)}
+${block("changed_files", changed.join(", "))}
+${block("project_files", digest(files, changed))}
+Add or update automated tests for this change only (keep existing tests unless the change made them wrong). Same test rules as always. Output:
+<say>…</say>
+then <file path="tests/….test.js">…</file> blocks for the test files you add or change.`,
+
   analyze: ({ task, files }) => `The client sent this request:
 ${block("request", task)}
 ${Object.keys(files).length ? `They attached an existing project that must be modified, not rewritten:\n${block("existing_files", digest(files, [], 80_000))}\n` : ""}
@@ -102,7 +143,8 @@ Write automated tests mapped to the acceptance criteria, 10-30 tests across 1-5 
 <say>…</say>
 then <file path="tests/….test.js">…</file> blocks.`,
 
-  debug: ({ spec, design, files, report, focus }) => `The QA lab reports failures.
+  debug: ({ spec, design, files, report, focus, known }) => `The QA lab reports failures.${known?.length ? `
+These tests already failed before this change; they are out of scope, do not assign work for them: ${known.join(" | ")}` : ""}
 ${block("spec", spec)}
 ${block("design", design)}
 ${block("test_report", report)}
@@ -118,7 +160,7 @@ ${block("design", design)}
 ${block("test_report", report)}
 ${block("debugger_analysis", analysis)}
 ${block("project_files", digest(files, focus))}
-Fix only what is assigned to you. Output:
+Fix only what is assigned to you. Never rewrite a file you were not shown in project_files from memory or guesswork: if you need one, name it in <say> and leave it out. Output:
 <say>…</say>
 then <file path="…">…</file> for every file you change (full contents). Do not output unchanged files.`,
 
