@@ -1,1236 +1,288 @@
-/* Agent Office UI: projects sidebar, brief assistant, and the live office view
-   driven by server events (SSE). */
+/* Agent Office window: listens to the local server (which receives Claude Code's
+   hooks) and turns each event into character movement. All animation is local:
+   no AI calls, no tokens. */
 (() => {
-  const { Office, TEAM, ORDER, avatar } = window.AgentOffice;
   const $ = (s) => document.querySelector(s);
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const md = (s) => (window.marked && window.DOMPurify ? DOMPurify.sanitize(marked.parse(s || "")) : `<pre>${esc(s)}</pre>`);
-  const time = () => new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const time = (t) => new Date(t || Date.now()).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const fmt = (n) => Number(n || 0).toLocaleString("th-TH");
-  const store = {
-    get(k, area = localStorage) { try { return JSON.parse(area.getItem(k)); } catch { return null; } },
-    set(k, v, area = localStorage) { try { area.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
-    del(k, area = localStorage) { try { area.removeItem(k); } catch { /* ignore */ } },
-  };
-  async function api(url, body) {
-    const res = await fetch(url, body === undefined ? undefined : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || res.statusText);
-    return data;
-  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  window.hydrateIcons();
 
-  hydrateIcons();
-  const office = new Office($("#scene"));
-  let config = { models: [], efforts: [], serverHasKey: false, localClaude: { available: false }, shareBases: [] };
+  // ---------- office + roster ----------
+  let office = null;
+  let pool = [];
+  const STATUS = { idle: "ว่าง", thinking: "กำลังคิด", typing: "กำลังทำงาน", running: "กำลังรันเทสต์" };
 
-  // ---------- settings ----------
-  const settings = Object.assign({ provider: "", model: "", effort: "medium", swuModel: "", maxFixRounds: 4, maxReviewRounds: 1 }, store.get("agentOffice.settings") || {});
-  const getKey = () => store.get("agentOffice.key") || store.get("agentOffice.key", sessionStorage) || "";
-  const getSwuKey = () => store.get("agentOffice.swuKey") || store.get("agentOffice.swuKey", sessionStorage) || "";
-  const isGuest = () => config.role === "guest";
-  // A friend's own key: used when the owner's tokens (or their share) run out.
-  const getOwnKey = () => store.get("agentOffice.ownKey") || store.get("agentOffice.ownKey", sessionStorage) || null;
-  const hasOwnKey = () => Boolean(getOwnKey()?.key);
-  // Default: SWU AI when the server has its key, else Claude on this machine, else an API key.
-  const provider = () => (isGuest() ? "api" : settings.provider || (config.swu?.serverKey ? "swu" : config.localClaude.available ? "local" : "api"));
-  const connected = () => {
-    if (isGuest()) return config.serverHasKey || hasOwnKey();
-    if (provider() === "local") return config.localClaude.available;
-    if (provider() === "swu") return Boolean(getSwuKey()) || Boolean(config.swu?.serverKey);
-    return config.serverHasKey || Boolean(getKey());
-  };
-  const llmBody = () => ({
-    settings: { ...settings, provider: provider() },
-    apiKey: provider() === "api" && !isGuest() ? getKey() : "",
-    swuKey: provider() === "swu" && !isGuest() ? getSwuKey() : "",
-    ...(isGuest() && hasOwnKey() ? { ownKey: { kind: getOwnKey().kind, key: getOwnKey().key }, ownFirst: Boolean(getOwnKey().first) } : {}),
-  });
-
-  function fillSettings() {
-    $("#setProvider").value = provider();
-    $("#setModel").innerHTML = config.models.map((m) => `<option value="${m.id}">${esc(m.label)}</option>`).join("");
-    $("#setModel").value = settings.model || config.defaultModel;
-    $("#setEffort").innerHTML = config.efforts.map((e) => `<option>${e}</option>`).join("");
-    $("#setEffort").value = settings.effort;
-    $("#setFix").value = settings.maxFixRounds;
-    $("#setReview").value = settings.maxReviewRounds;
-    $("#setKey").value = getKey();
-    $("#setRemember").checked = Boolean(store.get("agentOffice.key"));
-    $("#setSwuKey").value = getSwuKey();
-    $("#setSwuRemember").checked = Boolean(store.get("agentOffice.swuKey"));
-    $("#setSwuModel").value = settings.swuModel || config.swu?.model || "anthropic/claude-sonnet-5.5";
-    $("#setSwuKey").placeholder = config.swu?.serverKey ? "ใช้ SWU key ในไฟล์ .env ของเซิร์ฟเวอร์อยู่แล้ว (เว้นว่างได้)" : "API key จากเว็บไซต์ SWU AI";
-    const own = getOwnKey();
-    $("#setOwnKind").value = own?.kind || "";
-    $("#setOwnKey").value = own?.key || "";
-    $("#setOwnFirst").checked = Boolean(own?.first);
-    $("#setOwnRemember").checked = !own || Boolean(store.get("agentOffice.ownKey"));
-    renderBudget(budget);
-    syncSettingsForm();
+  function build(agents) {
+    pool = agents;
+    office?.destroy();
+    window.AgentOffice.configure(agents);
+    office = new window.AgentOffice.Office($("#scene"));
+    $("#roster").style.gridTemplateColumns = `repeat(${Math.min(agents.length, 9)}, minmax(0, 1fr))`;
+    $("#roster").innerHTML = agents.map((a) => `
+      <div class="member" id="m-${esc(a.id)}" style="--c:${esc(a.color)}" title="${esc(a.description)}">${window.AgentOffice.avatar(a.id, 30)}
+        <div><b>${esc(a.name)}</b><small>${esc(a.role_title || a.id)}</small><div class="st">${STATUS.idle}</div></div></div>`).join("");
   }
-  function syncSettingsForm() {
-    const p = $("#setProvider").value;
-    $("#keyGroup").hidden = p !== "api" || isGuest();
-    $("#swuGroup").hidden = p !== "swu" || isGuest();
-    $("#modelField").hidden = p === "swu" && !isGuest();
-    $("#effortField").hidden = p === "swu" && !isGuest();
-    $("#providerNote").textContent = p === "local"
-      ? (config.localClaude.available
-        ? `ใช้ token จากบัญชี Claude ที่ล็อกอิน ${config.localClaude.version} ไว้ในเครื่องนี้ ถ้ายังไม่ได้ล็อกอิน ให้เปิด terminal พิมพ์ claude แล้วใช้คำสั่ง /login`
-        : "ไม่พบ Claude Code ในเครื่องนี้ ติดตั้งด้วย npm i -g @anthropic-ai/claude-code แล้วล็อกอิน หรือเลือกช่องทางอื่น")
-      : p === "swu"
-        ? "ใช้ token จากโควตา SWU AI ของคุณ key จะถูกส่งไปที่เซิร์ฟเวอร์นี้ตอนเริ่มงานเท่านั้น"
-        : (config.serverHasKey ? "เซิร์ฟเวอร์มี API key อยู่แล้ว ใส่ key ของคุณเองเพื่อใช้แทนได้" : "ใส่ API key จาก console.anthropic.com key จะถูกส่งไปที่เซิร์ฟเวอร์นี้ตอนเริ่มงานเท่านั้น");
-    $("#ownKeyFields").hidden = !$("#setOwnKind").value;
-    const m = config.models.find((x) => x.id === $("#setModel").value);
-    $("#setEffort").disabled = Boolean(m && !m.effort);
-  }
-  $("#setProvider").addEventListener("change", syncSettingsForm);
-  $("#setOwnKind").addEventListener("change", syncSettingsForm);
-  $("#loadSwuModels").addEventListener("click", async () => {
-    const key = $("#setSwuKey").value.trim();
-    if (!key && !config.swu?.serverKey) { $("#swuNote").textContent = "ใส่ SWU API key ก่อน"; return; }
-    $("#swuNote").textContent = "กำลังดึงรายชื่อโมเดล…";
-    try {
-      const { models } = await api("/api/swu/models", { swuKey: key });
-      $("#swuModelList").innerHTML = models.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
-      const claude = models.filter((m) => /claude/i.test(m.id)).map((m) => m.id);
-      $("#swuNote").textContent = `พบ ${models.length} โมเดล${claude.length ? ` (Claude: ${claude.join(", ")})` : ""} คลิกช่องโมเดลเพื่อเลือก`;
-      if (claude.length && !$("#setSwuModel").value) $("#setSwuModel").value = claude[0];
-    } catch (err) {
-      $("#swuNote").textContent = err.message + " พิมพ์ชื่อโมเดลเองได้ เช่น anthropic/claude-sonnet-5";
-    }
-  });
-  $("#setModel").addEventListener("change", syncSettingsForm);
-  $("#settingsBtn").addEventListener("click", () => { fillSettings(); $("#settings").showModal(); });
-  $("#resetUsage").addEventListener("click", async () => {
-    renderBudget(await api("/api/usage/reset", {}));
-  });
-  $("#settings").addEventListener("close", async () => {
-    if ($("#settings").returnValue !== "save") return;
-    const swuKey = $("#setSwuKey").value.trim();
-    store.del("agentOffice.swuKey");
-    store.del("agentOffice.swuKey", sessionStorage);
-    if (swuKey) store.set("agentOffice.swuKey", swuKey, $("#setSwuRemember").checked ? localStorage : sessionStorage);
-    Object.assign(settings, {
-      provider: $("#setProvider").value,
-      model: $("#setModel").value,
-      effort: $("#setEffort").value,
-      swuModel: $("#setSwuModel").value.trim(),
-      maxFixRounds: Number($("#setFix").value) || 4,
-      maxReviewRounds: Math.max(0, Number($("#setReview").value) || 0),
-    });
-    store.set("agentOffice.settings", settings);
-    const key = $("#setKey").value.trim();
-    store.del("agentOffice.key");
-    store.del("agentOffice.key", sessionStorage);
-    if (key) store.set("agentOffice.key", key, $("#setRemember").checked ? localStorage : sessionStorage);
-    if (isGuest()) {
-      const own = { kind: $("#setOwnKind").value, key: $("#setOwnKey").value.trim(), first: $("#setOwnFirst").checked };
-      store.del("agentOffice.ownKey");
-      store.del("agentOffice.ownKey", sessionStorage);
-      if (own.kind && own.key) store.set("agentOffice.ownKey", own, $("#setOwnRemember").checked ? localStorage : sessionStorage);
-      renderBudget(budget);
-    }
-  });
-
-  // ---------- share with friends (owner only) ----------
-  const shareBase = () => (store.get("agentOffice.shareBase") || config.shareBases?.[0] || location.origin).replace(/\/+$/, "");
-  async function renderInvites() {
-    const { invites, serverHasKey } = await api("/api/invites");
-    config.serverHasKey = serverHasKey;
-    $("#serverKeyState").textContent = serverHasKey ? "ตั้ง API key สำหรับเพื่อนแล้ว (ใส่ใหม่เพื่อเปลี่ยน หรือเว้นว่างแล้วบันทึกเพื่อลบ)" : "ยังไม่ได้ตั้ง เพื่อนจะสั่งงานไม่ได้จนกว่าจะตั้ง";
-    // With a project open, links of friends in it open that project straight away.
-    const inProject = new Set(project ? projectMeta?.members || [] : []);
-    $("#inviteToProjectRow").hidden = !project;
-    $("#inviteNoProject").hidden = Boolean(project);
-    $("#inviteProjectName").textContent = project?.name || "";
-    $("#inviteList").innerHTML = invites.length ? invites.map((i) => {
-      const member = inProject.has("guest:" + i.code);
-      const link = member ? projectInviteUrl(i.code) : `${shareBase()}/i/${i.code}`;
-      return `
-      <div class="invite">
-        <div><b>${esc(i.name)}</b> <small>ใช้ไป ${fmt(i.used)} / ${fmt(i.limit)} tokens</small>${member ? ` <span class="shared">อยู่ในโปรเจกต์นี้</span>` : ""}</div>
-        <span class="row-gap">
-          ${project && !member ? `<button type="button" class="btn small ghost" data-join="${esc(i.code)}" title="ให้เพื่อนคนนี้เข้าโปรเจกต์ที่เปิดอยู่">${icon("UserPlus", 13)}ให้เข้าโปรเจกต์นี้</button>` : ""}
-          <button type="button" class="btn small ghost" data-copy="${esc(link)}">${icon("Copy", 13)}คัดลอก</button>
-          <button type="button" class="btn small ghost" data-revoke="${esc(i.code)}">${icon("Ban", 13)}ยกเลิก</button>
-        </span>
-        <code class="link-box">${esc(link)}</code>
-      </div>`;
-    }).join("") : `<p class="muted small">ยังไม่มีลิงก์เชิญ</p>`;
-  }
-  // Outside link: a Cloudflare quick tunnel to Agent Office (each app gets its own when opened).
-  let tunnelOn = false;
-  function renderTunnel(t, error) {
-    config.shareBases = t.shareBases || config.shareBases;
-    tunnelOn = Boolean(t.main?.url);
-    const btn = $("#tunnelToggle");
-    btn.disabled = false;
-    btn.querySelector("span").textContent = tunnelOn ? "ปิดลิงก์คนนอกบ้าน" : "เปิดให้คนนอกบ้านเข้า";
-    btn.classList.toggle("primary", !tunnelOn);
-    $("#tunnelState").innerHTML = t.fixed
-      ? `ใช้ที่อยู่ที่ตั้งไว้ใน .env: <code>${esc(t.fixed)}</code>`
-      : tunnelOn
-        ? `เปิดแล้ว คนนอกบ้านเข้าได้ที่ <code>${esc(t.main.url)}</code> ลิงก์เชิญด้านล่างใช้ที่อยู่นี้ให้แล้ว (ที่อยู่จะเปลี่ยนเมื่อปิดแล้วเปิดใหม่ ให้ส่งลิงก์เชิญใหม่)`
-        : "เพื่อนในวง Wi-Fi เดียวกันเปิดได้เลย ถ้าเพื่อนอยู่นอกบ้าน กดปุ่มนี้";
-    btn.hidden = Boolean(t.fixed);
-    const hint = error || (!t.available && !t.fixed ? t.hint : "");
-    $("#tunnelHint").hidden = !hint;
-    $("#tunnelHint").textContent = hint || "";
-  }
-  $("#tunnelToggle").addEventListener("click", async () => {
-    const btn = $("#tunnelToggle");
-    btn.disabled = true;
-    btn.querySelector("span").textContent = tunnelOn ? "กำลังปิด…" : "กำลังเปิด (ไม่เกิน 30 วินาที)…";
-    const res = await fetch("/api/tunnel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: !tunnelOn }) });
-    const t = await res.json().catch(() => ({}));
-    if (t.main?.url) store.del("agentOffice.shareBase");
-    renderTunnel(t, t.error);
-    $("#shareBase").value = shareBase();
-    renderInvites();
-  });
-  $("#shareBtn").addEventListener("click", async () => {
-    $("#serverKey").value = "";
-    try { renderTunnel(await api("/api/tunnel")); } catch { /* older server */ }
-    $("#shareBase").value = shareBase();
-    await renderInvites();
-    $("#share").showModal();
-  });
-  $("#shareBase").addEventListener("change", () => {
-    const v = $("#shareBase").value.trim();
-    if (v) store.set("agentOffice.shareBase", v); else store.del("agentOffice.shareBase");
-    renderInvites();
-  });
-  $("#saveServerKey").addEventListener("click", async () => {
-    await api("/api/server-key", { apiKey: $("#serverKey").value.trim() });
-    $("#serverKey").value = "";
-    renderInvites();
-  });
-  $("#createInvite").addEventListener("click", async () => {
-    const toProject = project && $("#inviteToProject").checked ? project.slug : undefined;
-    const inv = await api("/api/invites", { name: $("#inviteName").value.trim() || "เพื่อน", limit: Number($("#inviteLimit").value) || 200000, project: toProject });
-    $("#inviteName").value = "";
-    if (inv.project && projectMeta) renderProjectActions({ ...projectMeta, members: [...(projectMeta.members || []), "guest:" + inv.code] });
-    await renderInvites();
-    copyText(inv.project ? projectInviteUrl(inv.code) : `${shareBase()}/i/${inv.code}`);
-  });
-  $("#inviteList").addEventListener("click", async (e) => {
-    const c = e.target.closest("[data-copy]");
-    if (c) return copyText(c.dataset.copy, c);
-    const j = e.target.closest("[data-join]");
-    if (j && project) {
-      const { members } = await api(`/api/projects/${encodeURIComponent(project.slug)}/members`, { code: j.dataset.join, add: true });
-      renderProjectActions({ ...projectMeta, members });
-      return renderInvites();
-    }
-    const r = e.target.closest("[data-revoke]");
-    if (r) { await fetch(`/api/invites/${encodeURIComponent(r.dataset.revoke)}`, { method: "DELETE" }); renderInvites(); }
-  });
-
-  // ---------- token usage ----------
-  let budget = { used: 0, exhausted: false };
-  const when = (iso) => new Date(iso).toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" });
-  function renderBudget(b) {
-    if (!b) return;
-    budget = b;
-    const cap = !isGuest() && b.roundLimit ? ` / ~${fmt(b.roundLimit)}` : "";
-    const onOwn = isGuest() && (b.onOwnKey || (b.exhausted && hasOwnKey()));
-    $("#tokenText").textContent = onOwn
-      ? `ใช้ key ของคุณ${b.ownUsed ? ` ${fmt(b.ownUsed)} tokens` : ""}`
-      : b.exhausted ? (isGuest() ? "โควตาโทเค็นหมด" : "โทเค็นหมด") : `ใช้ไปแล้ว ${fmt(b.used)}${cap} tokens`;
-    $("#tokenChip").classList.toggle("out", Boolean(b.exhausted) && !onOwn);
-    const next = b.nextResetAt ? ` น่าจะรีเซ็ตราว ${when(b.nextResetAt)}` : "";
-    $("#tokenChip").title = b.exhausted
-      ? `ต้นทางแจ้งว่าโทเค็นหมด เมื่อต้นทางรีเซ็ตแล้วจะกลับมาใช้ได้และตัวนับเริ่มใหม่เอง${next}`
-      : `นับตั้งแต่ ${b.since ? when(b.since) : "-"}${isGuest() && b.limit ? ` · โควตา ${fmt(b.limit)} tokens` : ""}${cap ? ` · ต้นทางให้ประมาณ ${fmt(b.roundLimit)} tokens ต่อรอบ` : ""}`;
-    if ($("#usedText")) $("#usedText").textContent = `${fmt(b.used)} tokens`;
-    if ($("#roundsText")) $("#roundsText").innerHTML = roundsSummary(b);
-  }
-  function span(ms) {
-    const h = ms / 3600e3;
-    return h >= 36 ? `${Math.round(h / 24)} วัน` : h >= 1 ? `${Math.round(h)} ชั่วโมง` : `${Math.max(1, Math.round(ms / 60e3))} นาที`;
-  }
-  /** What the past rounds taught us about the upstream limit (owner only). */
-  function roundsSummary(b) {
-    if (!b.roundLimit) {
-      return b.lastReset?.reason === "upstream"
-        ? `ยังไม่รู้ว่าต้นทางจำกัดกี่ token ต่อรอบ รอบนี้เริ่มนับตั้งแต่ต้นทางรีเซ็ต (${when(b.lastReset.at)}) พอใช้จนหมดแล้วต้นทางรีเซ็ตอีกครั้ง ระบบจะรู้และแสดงให้เอง`
-        : "ยังไม่รู้ว่าต้นทางจำกัดกี่ token ต่อรอบ ระบบจะจำเองหลังโทเค็นหมดแล้วต้นทางรีเซ็ตครบ 2 ครั้ง (รอบแรกมักเริ่มนับกลางทาง จึงยังใช้วัดไม่ได้)";
-    }
-    const parts = [`ต้นทางให้ประมาณ <b>${fmt(b.roundLimit)}</b> tokens ต่อรอบ (ดูจาก ${b.roundsSeen} รอบที่ใช้จนหมด)`];
-    if (b.periodMs) parts.push(`รีเซ็ตประมาณทุก ${span(b.periodMs)}`);
-    if (b.nextResetAt) parts.push(`ครั้งถัดไปราว ${when(b.nextResetAt)}`);
-    const last = (b.rounds || []).slice(-3).reverse().map((r) => `<li>${fmt(r.used)} tokens · ${when(r.from)} ถึง ${when(r.outAt || r.to)}</li>`).join("");
-    return parts.join(" · ") + (last ? `<ul class="rounds-list">${last}</ul>` : "");
-  }
-
-  // ---------- examples + attachments ----------
-  const EXAMPLES = [
-    { label: "ร้านค้าออนไลน์", text: "สร้างเว็บไซต์ร้านค้าออนไลน์ขายเสื้อผ้า มีหน้ารวมสินค้าแยกหมวด ค้นหาและเรียงราคา หน้ารายละเอียดสินค้าเลือกไซซ์ ตะกร้า โค้ดส่วนลด หน้าชำระเงินพร้อมฟอร์มที่อยู่ และหน้าประวัติคำสั่งซื้อ" },
-    { label: "ระบบจองห้องประชุม", text: "สร้างเว็บจองห้องประชุม แสดงตารางรายวัน จองช่วงเวลาได้ ห้ามจองซ้อนกัน ยกเลิกการจองได้ และสรุปการใช้ห้องรายสัปดาห์" },
-    { label: "ตรวจเลขบัตรประชาชน", text: "เขียนฟังก์ชัน JavaScript ตรวจสอบเลขบัตรประชาชนไทย 13 หลักด้วย checksum รองรับรูปแบบที่มีขีดหรือเว้นวรรค" },
-  ];
-  $("#examples").innerHTML = EXAMPLES.map((e, i) => `<button type="button" data-ex="${i}">${esc(e.label)}</button>`).join("");
-  $("#examples").addEventListener("click", (ev) => {
-    const b = ev.target.closest("[data-ex]");
-    if (b) $("#task").value = EXAMPLES[b.dataset.ex].text;
-  });
-
-  let attached = [];
-  const TEXT_EXT = /\.(html?|css|js|cjs|mjs|ts|tsx|jsx|json|md|txt|svg|xml|ya?ml|py|java|go|rb|php|cs|sql|env\.example|gitignore)$/i;
-  async function readFiles(list) {
-    const out = [];
-    for (const f of list) {
-      const p = (f.webkitRelativePath || f.name).replace(/\\/g, "/");
-      if (/(^|\/)(node_modules|\.git|dist|build)\//.test(p) || !TEXT_EXT.test(p) || f.size > 300_000) continue;
-      out.push({ path: f.webkitRelativePath ? p.split("/").slice(1).join("/") : p, content: await f.text() });
-    }
-    return out.slice(0, 300);
-  }
-  for (const id of ["#fileInput", "#folderInput"]) {
-    $(id).addEventListener("change", async (ev) => {
-      attached = await readFiles(ev.target.files);
-      $("#attachInfo").textContent = attached.length ? `แนบแล้ว ${attached.length} ไฟล์` : "ไม่มีไฟล์ข้อความที่ใช้ได้";
-    });
-  }
-
-  // ---------- brief assistant ----------
-  const brief = { idea: "", answers: [], current: null, picked: new Set() };
-  function briefLog(html) {
-    $("#briefLog").insertAdjacentHTML("beforeend", html);
-    $("#briefLog").scrollTop = $("#briefLog").scrollHeight;
-  }
-  function renderOptions() {
-    const q = brief.current;
-    $("#briefOptions").innerHTML = (q?.options || []).map((o, i) =>
-      `<button type="button" data-opt="${i}" class="${brief.picked.has(i) ? "on" : ""}">${brief.picked.has(i) ? icon("Check", 13) : ""}${esc(o)}</button>`).join("");
-  }
-  async function briefStep(finish = false) {
-    $("#briefNext").disabled = true;
-    $("#briefFinish").disabled = true;
-    briefLog(`<div class="thinking-row" id="briefThinking">${avatar("pm", 22)}<span class="dots"><i></i><i></i><i></i></span></div>`);
-    let r;
-    try {
-      r = await api("/api/brief", { idea: brief.idea, answers: brief.answers, finish, projectSlug: project?.slug, ...llmBody() });
-    } catch (err) {
-      r = { done: false, question: "", options: [], warning: err.message };
-    }
-    $("#briefThinking")?.remove();
-    $("#briefNext").disabled = false;
-    $("#briefFinish").disabled = false;
-    if (r.usage) renderBudget(r.usage);
-    $("#briefMode").textContent = r.mode === "claude" ? "Nina ใช้ Claude ช่วยคิดคำถาม" : `ชุดคำถามพื้นฐาน${r.warning ? ` (${r.warning})` : ""}`;
-    if (r.done) {
-      $("#briefAsk").hidden = true;
-      $("#briefResult").hidden = false;
-      $("#briefText2").value = r.brief;
-      $("#briefName").value = r.projectName || "";
-      briefLog(`<div class="bq">${avatar("pm", 28)}<div class="bubble-q">สรุปโจทย์ให้แล้วค่ะ ตรวจดูด้านล่าง แก้ได้ตามต้องการ</div></div>`);
-      return;
-    }
-    brief.current = r;
-    brief.picked.clear();
-    briefLog(`<div class="bq">${avatar("pm", 28)}<div class="bubble-q">${esc(r.question)}</div></div>`);
-    renderOptions();
-    $("#briefText").value = "";
-    $("#briefText").focus();
-  }
-  function openBrief() {
-    brief.idea = $("#task").value.trim();
-    brief.answers = [];
-    brief.current = null;
-    $("#briefTitle").textContent = project ? `ช่วยคิดว่าจะเพิ่มหรือแก้อะไรใน "${project.name}"` : "ช่วยคิดโจทย์กับ Nina";
-    $("#briefLog").innerHTML = brief.idea
-      ? `<div class="ba">${esc(brief.idea)}</div>`
-      : "";
-    $("#briefAsk").hidden = false;
-    $("#briefResult").hidden = true;
-    $("#brief").showModal();
-    briefStep();
-  }
-  $("#briefBtn").addEventListener("click", openBrief);
-  $("#briefRestart").addEventListener("click", openBrief);
-  $("#briefOptions").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-opt]");
-    if (!b) return;
-    const i = Number(b.dataset.opt);
-    if (brief.current?.multi) { brief.picked.has(i) ? brief.picked.delete(i) : brief.picked.add(i); renderOptions(); }
-    else { brief.picked = new Set([i]); submitAnswer(); }
-  });
-  function submitAnswer() {
-    if (!brief.current) return;
-    const chosen = [...brief.picked].map((i) => brief.current.options[i]);
-    const typed = $("#briefText").value.trim();
-    const answer = [...chosen, typed].filter(Boolean).join(", ") || "ไม่แน่ใจ ให้ทีมเลือกให้";
-    brief.answers.push({ question: brief.current.question, answer });
-    briefLog(`<div class="ba">${esc(answer)}</div>`);
-    $("#briefOptions").innerHTML = "";
-    brief.current = null;
-    briefStep();
-  }
-  $("#briefNext").addEventListener("click", submitAnswer);
-  $("#briefText").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitAnswer(); } });
-  $("#briefFinish").addEventListener("click", () => {
-    if (brief.current && ($("#briefText").value.trim() || brief.picked.size)) {
-      const chosen = [...brief.picked].map((i) => brief.current.options[i]);
-      brief.answers.push({ question: brief.current.question, answer: [...chosen, $("#briefText").value.trim()].filter(Boolean).join(", ") });
-    }
-    $("#briefOptions").innerHTML = "";
-    briefStep(true);
-  });
-  $("#briefUse").addEventListener("click", () => {
-    $("#task").value = $("#briefText2").value.trim();
-    if (!project && $("#briefName").value.trim()) $("#projectName").value = $("#briefName").value.trim();
-    $("#brief").close();
-    $("#task").focus();
-  });
-
-  // ---------- pipeline ----------
-  const PHASES = [
-    { id: "kickoff", icon: "Users", label: "Kick-off", who: "ทั้งทีม" },
-    { id: "analyze", icon: "ClipboardList", label: "Requirement", who: "Nina" },
-    { id: "plan", icon: "LayoutTemplate", label: "ออกแบบ/แตกงาน", who: "Archie" },
-    { id: "build", icon: "Code", label: "เขียนโค้ด", who: "Mia + Ben" },
-    { id: "tests", icon: "FlaskConical", label: "เขียนเทสต์", who: "Tessa" },
-    { id: "run", icon: "Play", label: "รันเทสต์", who: "QA Lab" },
-    { id: "debug", icon: "Bug", label: "แก้บั๊ก", who: "Max" },
-    { id: "review", icon: "ScanSearch", label: "Code review", who: "Rex" },
-    { id: "signoff", icon: "BadgeCheck", label: "ส่งมอบ", who: "Nina" },
-  ];
-  const phaseState = {};
-  function renderPipeline() {
-    $("#pipeline").innerHTML = PHASES.map((p) => {
-      const s = phaseState[p.id] || {};
-      return `<li class="step ${s.state || ""}"><span class="ico-wrap">${icon(p.icon, 15)}</span><div><b>${esc(p.label)}</b><small>${esc(s.note || p.who)}</small></div></li>`;
-    }).join("");
-    office.kanbanSet(PHASES.map((p) => ({ label: p.label, state: phaseState[p.id]?.state })));
-  }
-
-  // ---------- roster ----------
-  const STATUS_TH = { idle: "ว่าง", thinking: "กำลังคิด", typing: "กำลังพิมพ์", running: "กำลังรันเทสต์" };
-  $("#roster").innerHTML = ORDER.map((id) => {
-    const t = TEAM[id];
-    return `<div class="member" id="m-${id}" style="--c:${t.color}">${avatar(id, 30)}<div><b>${t.name}</b><small>${t.short} · ${t.th}</small><div class="st">${STATUS_TH.idle}</div></div></div>`;
-  }).join("");
-  function setMember(id, state) {
-    const m = $(`#m-${id}`);
+  function status(id, state, label = "") {
+    if (!office?.agents[id]) id = "helper";
+    office.setStatus(id, state, label);
+    const m = document.getElementById(`m-${id}`);
     if (!m) return;
-    m.querySelector(".st").textContent = STATUS_TH[state] || state;
+    m.querySelector(".st").textContent = label && state !== "idle" ? label : STATUS[state] || state;
     m.classList.toggle("busy", state !== "idle");
   }
+  const allIdle = () => pool.forEach((a) => status(a.id, "idle"));
+  const nameOf = (id) => pool.find((a) => a.id === id)?.name || id;
 
-  // ---------- chat ----------
-  const chat = $("#chat");
-  const nameList = (to) => (to === "all" ? "ทุกคน" : (to || []).map((id) => TEAM[id]?.name).filter(Boolean).join(", "));
-  function chatMsg(from, to, text) {
-    const t = TEAM[from];
-    chat.querySelector(".empty")?.remove();
-    const div = document.createElement("div");
-    div.className = "msg";
-    div.innerHTML = `${avatar(from, 32)}<div class="body"><div class="who">${t.name} <span>${t.short}${to ? " → " + esc(nameList(to)) : ""} · ${time()}</span></div><div class="text">${esc(text)}</div></div>`;
-    chat.append(div);
-    chat.scrollTop = chat.scrollHeight;
-  }
-  function chatSys(text, cls = "", ic = "") {
-    chat.querySelector(".empty")?.remove();
-    const div = document.createElement("div");
-    div.className = "sys " + cls;
-    div.innerHTML = `${ic ? icon(ic, 13) : ""}<span>${esc(text)}</span>`;
-    chat.append(div);
-    chat.scrollTop = chat.scrollHeight;
+  // ---------- roles tab ----------
+  function renderRoles(agents, errors, dir) {
+    $("#roleCount").textContent = agents.filter((a) => !a.builtin).length;
+    if (dir) $("#rolesDir").innerHTML = `อ่านจาก <code>${esc(dir)}</code> ทุกไฟล์ .md คือ 1 role (ไฟล์เดียวกับที่ Claude Code ใช้เป็น subagent)`;
+    $("#roleErrors").innerHTML = (errors || []).map((e) => `<div class="role-error">${window.icon("TriangleAlert", 14)}<div><b>${esc(e.file)}</b><span>${esc(e.message)}</span></div></div>`).join("");
+    $("#roleList").innerHTML = agents.map((a) => `
+      <div class="role-card">
+        ${window.AgentOffice.avatar(a.id, 36)}
+        <div class="grow">
+          <div class="role-head"><b>${esc(a.name)}</b> <span class="muted">${esc(a.role_title || "")}</span>${a.builtin ? ` <span class="tag">ระบบ</span>` : ` <code>${esc(a.file)}</code>`}</div>
+          <p>${esc(a.description)}</p>
+          ${a.specialties?.length ? `<div class="tags">${a.specialties.map((s) => `<span class="tag">${esc(s)}</span>`).join("")}</div>` : ""}
+          ${a.tools ? `<small class="muted">tools: ${esc(Array.isArray(a.tools) ? a.tools.join(", ") : a.tools)}</small>` : ""}
+        </div>
+      </div>`).join("");
   }
 
-  const MODE_LABEL = { auto: "ทีมเลือกเอง", quick: "แก้เฉพาะส่วน", full: "ทำทั้งโครง" };
-  /** The sender's own message, on the right like any chat app. */
-  function chatUser(text, by, mode, focus) {
-    chat.querySelector(".empty")?.remove();
-    const div = document.createElement("div");
-    div.className = "msg me";
-    const tags = [mode && mode !== "auto" ? MODE_LABEL[mode] || mode : "", focus?.length ? focus.join(", ") : ""].filter(Boolean).map((t) => `<span class="tag-mode">${esc(t)}</span>`).join("");
-    div.innerHTML = `<span class="me-ava">${icon("User", 16)}</span><div class="body"><div class="who">${esc(by || "คุณ")} <span>· ${time()}</span>${tags}</div><div class="text">${esc(text)}</div></div>`;
-    chat.append(div);
-    chat.scrollTop = chat.scrollHeight;
+  // ---------- live feed ----------
+  const feed = $("#feed");
+  let lastWork = null; // consecutive tool calls by one agent update one line
+  function feedItem(cls, iconName, html, t) {
+    feed.querySelector(".empty")?.remove();
+    const d = document.createElement("div");
+    d.className = "fi " + cls;
+    d.innerHTML = `<span class="fi-ic">${window.icon(iconName, 14)}</span><div class="fi-body">${html}</div><time>${time(t)}</time>`;
+    feed.append(d);
+    while (feed.children.length > 300) feed.firstChild.remove();
+    feed.scrollTop = feed.scrollHeight;
+    lastWork = null;
+    return d;
   }
-  /** Who Archie chose for this message, and why. */
-  function routeCard(e) {
-    chat.querySelector(".empty")?.remove();
-    const head = e.mode === "answer" ? "ตอบคำถาม ไม่ต้องแก้ไฟล์" : e.mode === "quick" ? `แก้เฉพาะส่วน · ใช้ ${e.team.length} คน` : "งานใหญ่ · เรียกทั้งทีม";
-    const team = e.mode === "full" ? ORDER : e.team;
-    const div = document.createElement("div");
-    div.className = "route-card";
-    div.innerHTML = `<div class="rc-head">${icon("Workflow", 14)}<span>Archie เลือกทีม: ${esc(head)}</span></div>
-      <div class="rc-team">${team.map((id) => `<span class="rc-who">${avatar(id, 22)}${esc(TEAM[id]?.name || id)} <small class="muted">${esc(TEAM[id]?.short || "")}</small></span>`).join("")}</div>
-      ${e.why ? `<div class="rc-why">${esc(e.why)}</div>` : ""}
-      ${e.tasks?.length ? `<ol class="rc-tasks">${e.tasks.map((t) => `<li>${esc(TEAM[t.owner]?.name || t.owner)}: ${esc(t.title)}${t.files?.length ? ` <span class="muted">(${esc(t.files.join(", "))})</span>` : ""}</li>`).join("")}</ol>` : ""}`;
-    chat.append(div);
-    chat.scrollTop = chat.scrollHeight;
-  }
+  const who = (id) => `<span class="who">${window.AgentOffice.avatar(id, 18)}${esc(nameOf(id))}</span>`;
 
-  // ---------- work: tasks + documents ----------
-  let tasks = [];
-  function renderTasks() {
-    if (!tasks.length) return;
-    const STATE = { active: ["Loader", "กำลังทำ"], done: ["CircleCheck", "เสร็จ"], failed: ["CircleAlert", "ไม่มีไฟล์"], todo: ["Circle", "รอ"] };
-    $("#taskList").innerHTML = tasks.map((t) => {
-      const [ic, label] = STATE[t.state || "todo"];
-      return `<div class="task ${t.state || ""}">${avatar(t.owner, 28)}<div><b>${esc(t.id)} · ${esc(t.title)}</b><small>${esc(t.files.join(", ") || "ตามดีไซน์")}${t.depends.length ? ` · รอ ${esc(t.depends.join(", "))}` : ""}</small></div><span class="state">${t.state === "active" ? `<span class="spin">${icon(ic, 13)}</span>` : icon(ic, 13)}${label}</span></div>`;
-    }).join("");
-  }
-  const DOCS = [
-    { id: "spec", label: "Spec", icon: "ClipboardList" }, { id: "design", label: "Design", icon: "LayoutTemplate" },
-    { id: "debug", label: "Debug", icon: "Bug" }, { id: "review", label: "Review", icon: "ScanSearch" },
-    { id: "summary", label: "สรุปงาน", icon: "BadgeCheck" },
-  ];
-  const docs = {};
-  let currentDoc = null;
-  function renderDocs() {
-    $("#docTabs").innerHTML = DOCS.filter((d) => docs[d.id]).map((d) =>
-      `<button data-doc="${d.id}" class="${d.id === currentDoc ? "active" : ""}">${icon(d.icon, 13)}${d.label}${docs[d.id].version > 1 ? ` v${docs[d.id].version}` : ""}</button>`).join("");
-    const d = docs[currentDoc];
-    $("#docView").innerHTML = d
-      ? `<div class="meta">${avatar(d.by, 20)} ${esc(TEAM[d.by]?.name || "")} · เวอร์ชัน ${d.version}</div>${md(d.content)}`
-      : `<p class="muted small">เอกสารจากทีมจะแสดงที่นี่</p>`;
-  }
-  $("#docTabs").addEventListener("click", (e) => { const b = e.target.closest("[data-doc]"); if (b) { currentDoc = b.dataset.doc; renderDocs(); } });
+  // ---------- event queue: one step at a time, never stalls ----------
+  const queue = [];
+  let running = false;
+  let currentSession = null;
+  const arrive = (ids) => (office.fast || document.hidden ? null : Promise.race([office.arrived(ids), sleep(3500)]));
+  const pause = (ms) => (office.fast || document.hidden ? null : sleep(ms));
 
-  // ---------- files ----------
-  const files = {};
-  let currentFile = null;
-  let project = null; // { slug, name, dir, demoPath }
-  function fileIcon(p) {
-    if (/\.html?$/.test(p)) return "FileCode2";
-    if (/\.css$/.test(p)) return "Palette";
-    if (/test\.c?js$/.test(p)) return "FlaskConical";
-    if (/\.(c?js|mjs|ts)$/.test(p)) return "FileCode";
-    if (/\.json$/.test(p)) return "Braces";
-    return "FileText";
+  function push(e) {
+    queue.push(e);
+    if (!running) drain();
   }
-  function renderTree(flash) {
-    const paths = Object.keys(files).sort((a, b) => {
-      const da = a.includes("/"), db = b.includes("/");
-      return da === db ? a.localeCompare(b) : da ? 1 : -1;
-    });
-    let lastDir = null;
-    const rows = [];
-    for (const p of paths) {
-      const dir = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
-      if (dir !== lastDir) { if (dir) rows.push(`<li class="dir">${icon("Folder", 13)}${esc(dir)}/</li>`); lastDir = dir; }
-      const f = files[p];
-      const color = TEAM[f.by]?.color || "#999";
-      rows.push(`<li><button data-file="${esc(p)}" class="${p === currentFile ? "active" : ""} ${p === flash ? "flash" : ""}">${icon(fileIcon(p), 13)}<span class="name">${esc(p.split("/").pop())}</span><span class="who" style="--c:${color}" title="${esc(TEAM[f.by]?.name || "ไฟล์เดิม")}"></span></button></li>`);
+  async function drain() {
+    running = true;
+    while (queue.length) {
+      const e = queue.shift();
+      office.fast = queue.length > 15 || e.replay; // catch up quickly after a burst
+      try { await play(e); } catch (err) { console.error(err); }
     }
-    $("#fileTree").innerHTML = rows.join("");
-    $("#fileCount").hidden = !paths.length;
-    $("#fileCount").textContent = paths.length;
-    $("#filesInfo").textContent = paths.length ? `${paths.length} ไฟล์` : "ยังไม่มีไฟล์";
-  }
-  function showFile(p) {
-    currentFile = p;
-    const f = files[p];
-    if (!f) return;
-    $("#fileHead").innerHTML = `${icon(fileIcon(p), 13)}<span>${esc(p)}</span><span>· v${f.version} · ${esc(TEAM[f.by]?.name || "ไฟล์เดิม")}</span>`;
-    $("#fileBody").textContent = f.content;
-    $("#editFileBtn").hidden = !project;
-    renderTree();
-  }
-  $("#fileTree").addEventListener("click", (e) => { const b = e.target.closest("[data-file]"); if (b) showFile(b.dataset.file); });
-  // Long lines wrap by default so nothing hides past the edge; toggle for raw layout.
-  const wrapOn = store.get("agentOffice.wrap") !== false;
-  $("#fileBody").classList.toggle("wrap", wrapOn);
-  $("#wrapToggle").classList.toggle("active", wrapOn);
-  $("#wrapToggle").addEventListener("click", () => {
-    const on = !$("#fileBody").classList.contains("wrap");
-    $("#fileBody").classList.toggle("wrap", on);
-    $("#wrapToggle").classList.toggle("active", on);
-    $("#wrapToggle").title = on ? "ตัดบรรทัดอยู่ (กดเพื่อเลื่อนซ้ายขวาแทน)" : "ไม่ตัดบรรทัด (กดเพื่อตัดบรรทัด)";
-    store.set("agentOffice.wrap", on);
-  });
-
-  // ---------- tests ----------
-  const rounds = [];
-  function renderTests() {
-    const r = rounds.at(-1);
-    if (!r) return;
-    const fails = r.results.filter((x) => !x.ok), oks = r.results.filter((x) => x.ok);
-    $("#testView").innerHTML = `
-      <div class="test-summary">
-        <div class="stat ${r.ok ? "ok" : "bad"}"><b>${r.passed}/${r.total}</b><small>ผ่านทั้งหมด</small></div>
-        <div class="stat"><b>${r.testCount}</b><small>เทสต์อัตโนมัติ</small></div>
-        <div class="stat"><b>${r.total - r.testCount}</b><small>ตรวจไฟล์ (syntax/ลิงก์)</small></div>
-      </div>
-      <div class="rounds">${rounds.map((x) => `<span class="round ${x.ok ? "ok" : "bad"}">${icon(x.ok ? "CircleCheck" : "CircleX", 12)}รอบ ${x.round}: ${x.passed}/${x.total}</span>`).join("")}</div>
-      ${[...fails, ...oks].map((x) => `<div class="result ${x.ok ? "ok" : "bad"}">${icon(x.ok ? "Check" : "X", 14)}<div>${esc(x.name)}${x.ok ? "" : `<pre>${esc(x.error)}</pre>`}</div></div>`).join("")}`;
+    office.fast = false;
+    running = false;
   }
 
-  // ---------- preview + sharing ----------
-  let previewTimer = 0;
-  const hasPage = () => Object.keys(files).some((p) => p.endsWith(".html"));
-  /** Link other people can open: the LAN address when browsing on localhost, else this origin. */
-  function shareUrl(demoPath) {
-    const local = /^(localhost|127\.|\[::1\])/.test(location.hostname);
-    return (local ? shareBase() : location.origin) + demoPath;
-  }
-  // Each project runs as its own website on its own port. Through the outside link (a
-  // domain name instead of an IP) that port is unreachable, so the app gets its own
-  // https link instead; /p/ is the last fallback.
-  const directHost = () => /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:]+\])$/i.test(location.hostname);
-  let appState = null;
-  async function refreshPreview(force) {
-    if (!project || !hasPage()) return;
-    const slug = project.slug;
-    let url = project.demoPath, share = shareUrl(project.demoPath);
-    $("#previewInfo").textContent = directHost() ? "กำลังเปิดแอป…" : "กำลังเปิดแอปและสร้างลิงก์ของแอป (ครั้งแรกใช้เวลาสักครู่)…";
-    try { appState = await api(`/api/projects/${encodeURIComponent(slug)}/app`); } catch { appState = null; }
-    if (project?.slug !== slug) return;
-    const pub = appState?.running && appState.publicUrl ? appState.publicUrl.replace(/\/+$/, "") + "/" : "";
-    if (appState?.running && directHost()) {
-      url = `${location.protocol}//${location.hostname}:${appState.port}/`;
-      share = pub || `${new URL(shareBase()).protocol}//${new URL(shareBase()).hostname}:${appState.port}/`;
-    } else if (pub) {
-      url = share = pub;
-    }
-    $("#openPreview").href = url;
-    $("#openDemoTop").href = url;
-    for (const id of ["#openPreview", "#copyLink", "#demoLink", "#restartApp"]) $(id).hidden = false;
-    $("#reloadPreview").disabled = false;
-    $("#demoLink").textContent = share;
-    const canShareOut = config.role === "owner" && directHost() && appState?.running;
-    $("#appTunnel").hidden = !canShareOut;
-    $("#appTunnel").querySelector("span").textContent = pub ? "ปิดลิงก์นอกบ้านของแอป" : "แชร์แอปนี้ออกนอกบ้าน";
-    const broken = appState && !appState.running && (directHost() || appState.error);
-    $("#previewInfo").textContent = broken
-      ? `แอปเปิดไม่ขึ้น: ${appState.error || appState.reason || "ไม่ทราบสาเหตุ"}`
-      : !directHost() && pub ? "แอปนี้มีลิงก์ของตัวเอง สมัครและ login ได้จริง ถ้า login ในกรอบนี้ไม่ติด กด \"เปิด\" เพื่อใช้ในแท็บใหม่"
-      : pub ? "แอปนี้มีลิงก์ https ของตัวเองแล้ว ส่งลิงก์นี้ให้ใครก็ได้ แม้อยู่นอกบ้าน"
-      : appState?.kind === "app" ? "แอปจริง (มีเซิร์ฟเวอร์และฐานข้อมูล) ลิงก์นี้ส่งให้คนในวง Wi-Fi เดียวกันลองได้" : "ลิงก์เดโม่สำหรับแชร์";
-    $("#appLog").hidden = !(broken && appState.logs);
-    $("#appLog").textContent = broken ? appState.logs || "" : "";
-    if (force || $(".tab[data-tab=preview]").classList.contains("active")) $("#previewFrame").src = url;
-  }
-  $("#reloadPreview").addEventListener("click", () => refreshPreview(true));
-  $("#appTunnel").addEventListener("click", async () => {
-    if (!project) return;
-    const on = !appState?.publicUrl;
-    const btn = $("#appTunnel");
-    btn.disabled = true;
-    $("#previewInfo").textContent = on ? "กำลังสร้างลิงก์ https ของแอป (ไม่เกิน 30 วินาที)…" : "กำลังปิดลิงก์…";
-    const res = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/app/tunnel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on }) });
-    const r = await res.json().catch(() => ({}));
-    btn.disabled = false;
-    await refreshPreview(false);
-    if (!res.ok && r.error) $("#previewInfo").textContent = r.error;
-  });
-  $("#restartApp").addEventListener("click", async () => {
-    if (!project) return;
-    $("#previewInfo").textContent = "กำลังรีสตาร์ทแอป…";
-    await api(`/api/projects/${encodeURIComponent(project.slug)}/app/restart`, {}).catch(() => {});
-    refreshPreview(true);
-  });
+  async function play(e) {
+    switch (e.type) {
+      case "SESSION_START":
+        setConn(e.session_id);
+        break;
 
-  async function copyText(text, btn) {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const ta = Object.assign(document.createElement("textarea"), { value: text });
-      document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove();
-    }
-    if (btn) { const old = btn.innerHTML; btn.innerHTML = `${icon("Check", 14)}คัดลอกแล้ว`; setTimeout(() => (btn.innerHTML = old), 1500); }
-  }
-  $("#copyLink").addEventListener("click", (e) => copyText($("#demoLink").textContent, e.currentTarget));
-  $("#copyLinkTop").addEventListener("click", (e) => project && copyText(shareUrl(project.demoPath), e.currentTarget));
+      case "ORCHESTRATOR_THINKING":
+        setConn(e.session_id);
+        allIdle();
+        office.lab("idle");
+        feedItem("user", "MessageSquare", `<b>คำสั่งใหม่</b> ${esc(e.text)}`, e.t);
+        office.moveTo("orchestrator", "board");
+        await arrive(["orchestrator"]);
+        status("orchestrator", "thinking", "คิดว่าจะใช้ใคร");
+        office.say("orchestrator", `ได้รับงาน: ${e.text}`);
+        await pause(900);
+        break;
 
-  /** Write every project file into a folder the user picks (Chrome / Edge). */
-  async function saveToLocalFolder(slug) {
-    if (!window.showDirectoryPicker) {
-      alert("เบราว์เซอร์นี้ยังไม่รองรับการเลือกโฟลเดอร์ ใช้ Chrome หรือ Edge หรือดาวน์โหลด .zip แทน");
-      return;
-    }
-    let root;
-    try { root = await window.showDirectoryPicker({ mode: "readwrite" }); } catch { return; }
-    const { files: all } = await api(`/api/projects/${encodeURIComponent(slug)}/files`);
-    const top = await root.getDirectoryHandle(slug, { create: true });
-    for (const [p, content] of Object.entries(all)) {
-      const parts = p.split("/");
-      let dir = top;
-      for (const d of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(d, { create: true });
-      const w = await (await dir.getFileHandle(parts.at(-1), { create: true })).createWritable();
-      await w.write(content);
-      await w.close();
-    }
-    chatSys(`บันทึก ${Object.keys(all).length} ไฟล์ลงโฟลเดอร์ ${root.name}/${slug} แล้ว`, "good", "HardDriveDownload");
-  }
-  $("#saveLocalBtn").addEventListener("click", () => project && saveToLocalFolder(project.slug));
+      case "AGENT_ASSIGNED": {
+        const to = office.agents[e.to] ? e.to : "helper";
+        feedItem("assign", "ArrowRightLeft", `${who("orchestrator")} มอบงานให้ ${who(to)}${e.agent !== to ? ` <span class="muted">(${esc(e.agent)})</span>` : ""}${e.parallel ? ` <span class="tag">ขนาน</span>` : ""}<div class="sub">${esc(e.subtask)}</div>`, e.t);
+        status("orchestrator", "typing", "มอบหมายงาน");
+        office.moveTo("orchestrator", `visit:${to}`);
+        await arrive(["orchestrator"]);
+        office.say("orchestrator", e.subtask || "ฝากงานนี้ด้วย", nameOf(to));
+        office.react([to], "nod");
+        status(to, "thinking", "รับงาน");
+        await pause(1100);
+        office.moveTo("orchestrator", "desk");
+        status("orchestrator", "thinking", "รอผล");
+        break;
+      }
 
-  // ---------- live streams ----------
-  const streams = {};
-  function stream(id) {
-    if (!streams[id]) {
-      $("#liveView .empty")?.remove();
-      const t = TEAM[id];
-      const box = document.createElement("section");
-      box.className = "stream";
-      box.innerHTML = `<header>${avatar(id, 22)}${t.name} <span class="muted">${t.short}</span><span class="state"></span></header><pre></pre>`;
-      $("#liveView").prepend(box);
-      streams[id] = { box, pre: box.querySelector("pre"), state: box.querySelector(".state") };
+      case "AGENT_WORKING": {
+        const id = office.agents[e.agent] ? e.agent : "helper";
+        const testing = e.tool && /^(Bash|PowerShell)$/.test(e.tool) && /test|jest|pytest|vitest|mocha/i.test(e.badge || "");
+        status(id, testing ? "running" : "typing", e.badge);
+        if (testing) office.lab("running");
+        if (id !== "orchestrator" && office.agents[id].at !== "desk" && !office.agents[id].route.length) office.moveTo(id, "desk");
+        if (lastWork && lastWork.id === id) {
+          lastWork.n++;
+          lastWork.node.querySelector(".fi-body").innerHTML = `${who(id)} ${esc(e.badge)} <span class="muted">· ${lastWork.n} ขั้น</span>`;
+          lastWork.node.querySelector("time").textContent = time(e.t);
+        } else {
+          const node = feedItem("work", "Wrench", `${who(id)} ${esc(e.badge)}`, e.t);
+          lastWork = { id, node, n: 1 };
+        }
+        break;
+      }
+
+      case "AGENT_HANDOFF": {
+        const from = office.agents[e.from] ? e.from : "helper";
+        feedItem("handoff", "PackageCheck", `${who(from)} ส่งงานกลับให้ ${who("orchestrator")}${e.summary ? `<div class="sub">${esc(e.summary)}</div>` : ""}`, e.t);
+        office.lab("idle");
+        status(from, "typing", "ส่งงาน");
+        office.moveTo(from, "visit:orchestrator");
+        await arrive([from]);
+        office.say(from, e.summary ? `เสร็จแล้ว: ${e.summary}` : "เสร็จแล้ว", "Claude");
+        office.react(["orchestrator"], "nod");
+        await pause(1200);
+        office.moveTo(from, "desk");
+        status(from, "idle");
+        status("orchestrator", "thinking", "รวมผล");
+        break;
+      }
+
+      case "AGENT_DONE":
+        status(office.agents[e.agent] ? e.agent : "helper", "idle");
+        break;
+
+      case "TASK_COMPLETE":
+        allIdle();
+        office.lab("idle");
+        office.moveTo("orchestrator", "desk");
+        feedItem("done", "BadgeCheck", `<b>เสร็จ</b> ใช้ agent ${e.agents} งาน · ${fmt(e.tokens)} tokens${e.summary ? `<div class="sub">${esc(e.summary)}</div>` : ""}`, e.t);
+        if (!e.replay) {
+          office.say("orchestrator", e.summary || "เสร็จแล้ว");
+          office.react(window.AgentOffice.ORDER, "jump");
+          if (!office.fast) office.confetti();
+          addTokens(e.tokens);
+          loadSessions(true);
+        }
+        break;
+
+      case "ANCHORED":
+        feedItem(e.ok && (e.pushed || !e.remote) ? "anchor" : "warn", e.ok ? "Link" : "TriangleAlert",
+          e.ok ? `ยึด hash ลง git แล้ว <code>${esc(String(e.commit).slice(0, 10))}</code>${e.pushed ? " และขึ้น GitHub แล้ว" : e.remote ? ` แต่ยังไม่ขึ้น GitHub: ${esc(e.push_error || "")}` : " (ในเครื่อง)"}` : `ยึด hash ไม่สำเร็จ: ${esc(e.error)}`, e.t);
+        if (!e.replay && $(".tab[data-tab=audit]").classList.contains("active")) loadSession(currentAudit);
+        break;
     }
-    return streams[id];
   }
+
+  // ---------- connection ----------
+  function setConn(sessionId) {
+    currentSession = sessionId || currentSession;
+    $("#connChip").classList.add("live");
+    $("#connChip").innerHTML = `${window.icon("PlugZap", 14)}<span>เชื่อมกับ Claude Code${currentSession ? ` · ${esc(currentSession.slice(0, 8))}` : ""}</span>`;
+  }
+  let roundTokens = 0;
+  function addTokens(n) {
+    roundTokens += n || 0;
+    $("#tokenChip").hidden = false;
+    $("#tokenChip span").textContent = `session นี้ ${fmt(roundTokens)} tokens`;
+  }
+
+  function connect() {
+    const es = new EventSource("/events");
+    es.onmessage = (m) => {
+      const e = JSON.parse(m.data);
+      if (e.type === "HELLO") {
+        build(e.agents);
+        renderRoles(e.agents, e.errors);
+        fetch("/api/agents").then((r) => r.json()).then((d) => renderRoles(d.agents, d.errors, d.dir)).catch(() => {});
+        // Catch up on what happened before this window opened, without the walking.
+        feed.innerHTML = `<div class="empty">ยังไม่มีงาน<br>เปิด Claude Code ในโฟลเดอร์นี้ แล้วพิมพ์งานได้เลย ตัวละครจะขยับตามที่ Claude ทำจริง</div>`;
+        for (const r of e.recent) push({ ...r, replay: true });
+        return;
+      }
+      if (e.type === "AGENTS_CHANGED") {
+        build(e.agents);
+        renderRoles(e.agents, e.errors);
+        feedItem("info", "UserPlus", `อัปเดต roles จากไฟล์ .md แล้ว (${e.agents.filter((a) => !a.builtin).length} roles${e.errors.length ? `, มีปัญหา ${e.errors.length} ไฟล์ ดูแท็บ Roles` : ""})`, e.t);
+        return;
+      }
+      push(e);
+    };
+    es.onerror = () => {
+      $("#connChip").classList.remove("live");
+      $("#connChip").innerHTML = `${window.icon("Unplug", 14)}<span>ต่อเซิร์ฟเวอร์ไม่ได้ กำลังลองใหม่…</span>`;
+    };
+  }
+
+  // ---------- audit tab ----------
+  let currentAudit = null;
+  async function loadSessions(keep) {
+    const { sessions } = await (await fetch("/api/sessions")).json();
+    const sel = $("#sessionSelect");
+    const was = keep ? sel.value : null;
+    sel.innerHTML = sessions.length
+      ? sessions.map((s) => `<option value="${esc(s.session_id)}">${esc(new Date(s.updated).toLocaleString("th-TH"))} · ${esc(s.first_prompt || s.session_id.slice(0, 8))} (${s.prompts} รอบ)</option>`).join("")
+      : `<option value="">ยังไม่มี session</option>`;
+    const pick = (was && sessions.some((s) => s.session_id === was) ? was : sessions[0]?.session_id) || "";
+    sel.value = pick;
+    if (pick) loadSession(pick); else { $("#timeline").innerHTML = `<div class="empty">ยังไม่มี session<br>สั่งงานใน Claude Code แล้วกลับมาดูที่นี่</div>`; $("#auditActions").hidden = true; $("#verifyBox").hidden = true; }
+  }
+
+  const tok = (t) => (t ? `${fmt((t.input || 0) + (t.output || 0))} tokens${t.source === "estimate" ? " (ประมาณ)" : ""}` : "");
+  const secs = (ms) => (ms != null ? `${(ms / 1000).toFixed(1)} วิ` : "");
+  const pre = (label, text, open = false) => (text ? `<details${open ? " open" : ""}><summary>${esc(label)}</summary><pre>${esc(text)}</pre></details>` : "");
+
+  async function loadSession(id) {
+    if (!id) return;
+    currentAudit = id;
+    const r = await fetch(`/api/sessions/${encodeURIComponent(id)}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const v = d.verification;
+    $("#verifyBox").hidden = false;
+    $("#verifyBox").className = "verify " + (v.ok ? "ok" : "bad");
+    $("#verifyBox").innerHTML = v.ok
+      ? `${window.icon("ShieldCheck", 16)}<div><b>hash chain ถูกต้อง</b><span>${v.count} entries · head <code>${esc(v.head.slice(0, 16))}…</code></span></div>`
+      : `${window.icon("ShieldAlert", 16)}<div><b>log ถูกแก้ไข</b><span>${esc(v.reason)}</span></div>`;
+    $("#auditActions").hidden = false;
+    $("#exportJson").href = `/api/sessions/${encodeURIComponent(id)}/export.json`;
+    $("#exportMd").href = `/api/sessions/${encodeURIComponent(id)}/export.md`;
+    $("#timeline").innerHTML = d.rounds.length ? d.rounds.map((round, i) => `
+      <section class="round">
+        <h4>รอบที่ ${i + 1} <time>${esc(new Date(round.prompt.ts).toLocaleString("th-TH"))}</time></h4>
+        <div class="step user"><span class="dotc"></span><div><b>1. คำสั่งของผู้ใช้</b><p>${esc(round.prompt.prompt)}</p></div></div>
+        <div class="step orch"><span class="dotc"></span><div><b>2. Orchestrator เลือก ${round.steps.length} งาน</b>
+          <p>${round.steps.length ? round.steps.map((s) => `${window.AgentOffice.avatar(pool.some((a) => a.id === s.assigned.agent) ? s.assigned.agent : "helper", 18)} ${esc(s.assigned.agent)}`).join(" → ") : "ไม่ได้เรียก agent ย่อย Claude ทำเอง"}${round.steps.some((s) => s.assigned.execution === "parallel") ? ` <span class="tag">มีงานขนาน</span>` : ""}</p></div></div>
+        ${round.steps.map((s, j) => `
+          <div class="step agent"><span class="dotc" style="--c:${esc(pool.find((a) => a.id === s.assigned.agent)?.color || "#6b7a8f")}"></span><div>
+            <b>3.${j + 1} ${esc(s.assigned.agent)}</b> <span class="muted small">${esc([s.assigned.execution, secs(s.result?.duration_ms), tok(s.finished?.tokens)].filter(Boolean).join(" · "))}</span>
+            <p>${esc(s.assigned.subtask)}</p>
+            <small class="muted">${s.assigned.md_file ? `ไฟล์ ${esc(s.assigned.md_file)} · sha256 <code>${esc(s.assigned.md_sha256.slice(0, 12))}…</code>` : "subagent ในตัวของ Claude Code"}</small>
+            ${pre("เหตุผลที่เลือก", s.assigned.reasoning)}${pre("Input", s.assigned.input)}${pre("Output", s.result?.output)}
+          </div></div>`).join("")}
+        <div class="step final"><span class="dotc"></span><div><b>4. คำตอบสุดท้าย</b> <span class="muted small">${round.final ? esc([secs(round.final.duration_ms), tok(round.final.tokens_round_total), `${round.tools} tool calls`].join(" · ")) : "ยังไม่จบ"}</span>
+          ${pre("ข้อความ", round.final?.text, true)}
+          ${round.anchors.map((a) => `<small class="anchor ${a.pushed ? "ok" : ""}">${window.icon("Link", 12)} ${a.ok ? `commit <code>${esc(String(a.commit).slice(0, 10))}</code> · ${a.pushed ? "ขึ้น GitHub แล้ว" : "ยังไม่ขึ้น GitHub"}` : `ยึด hash ไม่สำเร็จ: ${esc(a.error)}`}</small>`).join("")}
+        </div></div>
+      </section>`).join("") : `<div class="empty">session นี้ยังไม่มีคำสั่ง</div>`;
+  }
+  $("#sessionSelect").addEventListener("change", (e) => loadSession(e.target.value));
+  $("#refreshAudit").addEventListener("click", () => loadSessions(true));
 
   // ---------- tabs ----------
   document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
-    document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + tab.dataset.tab));
-    if (tab.dataset.tab === "work") tab.querySelector(".dot").hidden = true;
-    if (tab.dataset.tab === "preview") refreshPreview(true);
+    document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === `panel-${tab.dataset.tab}`));
+    if (tab.dataset.tab === "audit") loadSessions(true);
   }));
-  const markWork = () => { if (!$(".tab[data-tab=work]").classList.contains("active")) $(".tab[data-tab=work] .dot").hidden = false; };
 
-  // ---------- projects sidebar ----------
-  const STATUS_LABEL = { passed: "ผ่าน", running: "กำลังทำ", "needs-work": "ยังไม่ผ่าน", failed: "ล้มเหลว", cancelled: "หยุดแล้ว", interrupted: "ถูกขัดจังหวะ" };
-  let projectList = [];
-  async function loadProjects() {
-    try {
-      const { dir, projects } = await api("/api/projects");
-      projectList = projects;
-      renderProjectNav();
-    } catch { /* server not ready */ }
-  }
-  function renderProjectNav() {
-    $("#projectNav").innerHTML = projectList.length ? projectList.map((p) => `
-      <button data-slug="${esc(p.slug)}" class="${project?.slug === p.slug ? "active" : ""}">
-        <span class="sdot ${esc(p.status || "")}" title="${esc(STATUS_LABEL[p.status] || "")}"></span>
-        <span class="nm">${esc(p.name || p.slug)}</span>
-        <small>${(p.jobs || []).length} รอบงาน · ${p.updatedAt ? new Date(p.updatedAt).toLocaleDateString("th-TH", { day: "numeric", month: "short" }) : ""}</small>
-        ${config.role === "guest" && p.owner !== config.userId ? `<span class="shared">แชร์กับคุณ</span>` : (p.members || []).length ? `<span class="shared">เพื่อนร่วมแก้ ${(p.members || []).length} คน</span>` : ""}
-      </button>`).join("") : `<p class="muted small pad">ยังไม่มีโปรเจกต์</p>`;
-  }
-  $("#projectNav").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-slug]");
-    if (b) { openProject(b.dataset.slug); closeSidebar(); }
-  });
-  $("#newProjectBtn").addEventListener("click", () => { newProject(); closeSidebar(); });
-  const closeSidebar = () => { $("#sidebar").classList.remove("open"); $("#sidebarScrim").hidden = true; };
-  $("#openSidebar").addEventListener("click", () => { $("#sidebar").classList.add("open"); $("#sidebarScrim").hidden = false; });
-  $("#closeSidebar").addEventListener("click", closeSidebar);
-  $("#sidebarScrim").addEventListener("click", closeSidebar);
-
-  function setHeader() {
-    $("#projectTitle").textContent = project ? project.name : "โปรเจกต์ใหม่";
-    $("#projectSub").textContent = project ? "ดูทีมทำงาน สั่งงานเพิ่ม หรือทำต่อจากรอบที่ค้างได้" : "ทีม AI ที่วิเคราะห์ เขียนโค้ด ทดสอบ รีวิว และแก้บั๊ก จนกว่างานจะผ่าน";
-    $("#taskLabel").textContent = project ? `สั่งงานเพิ่มในโปรเจกต์นี้ (ทีมจะแก้ต่อจากไฟล์ล่าสุด)` : "งานจากลูกค้า";
-    $("#nameField").hidden = Boolean(project);
-    $("#examples").hidden = Boolean(project);
-    $("#pickFileBtn").hidden = !project;
-    for (const b of document.querySelectorAll("#modeSeg button")) b.disabled = !project && b.dataset.mode !== "full";
-    if (!project) setMode("full", false); else if (!modeTouched) setMode("auto", false);
-    renderFocus();
-    renderProjectNav();
-  }
-
-  // ---------- project sharing + delete ----------
-  let projectMeta = null;
-  const isMine = (meta) => config.role === "owner" || (meta && meta.owner === config.userId);
-  function renderProjectActions(meta) {
-    projectMeta = meta;
-    const members = meta?.members || [];
-    $("#membersBtn").hidden = !project;
-    $("#deleteProjectBtn").hidden = !project || !isMine(meta);
-    const badge = $("#sharedBadge");
-    if (project && config.role === "guest" && meta?.owner !== config.userId) {
-      badge.hidden = false;
-      badge.querySelector("span").textContent = `แชร์โดย ${meta?.ownerName || "เจ้าของเครื่อง"}`;
-    } else if (project && members.length) {
-      badge.hidden = false;
-      badge.querySelector("span").textContent = `เพื่อนร่วมแก้ ${members.length} คน`;
-    } else {
-      badge.hidden = true;
-    }
-  }
-
-  /** Owner: every friend with a checkbox. Friends: who is in the project, plus links they created. */
-  async function renderMembers() {
-    const slug = encodeURIComponent(project.slug);
-    const info = await api(`/api/projects/${slug}/members`);
-    $("#memberQuota").textContent = isGuest() ? `โควตาของเพื่อนที่ชวนจะแบ่งจากโควตาของคุณ (เหลือ ${fmt(info.yourRemaining)} tokens)` : "";
-    if (config.role === "owner") {
-      const { invites } = await api("/api/invites");
-      const members = new Set(projectMeta?.members || []);
-      $("#memberList").innerHTML = invites.length ? invites.map((i) => `
-        <label class="member-row">
-          <input type="checkbox" data-member="${esc(i.code)}" ${members.has("guest:" + i.code) ? "checked" : ""}>
-          <span class="grow"><b>${esc(i.name)}</b><small>ใช้ไป ${fmt(i.used)} / ${fmt(i.limit)} tokens${i.invitedBy ? " · ชวนโดยเพื่อน" : ""}</small></span>
-          <button type="button" class="btn small ghost" data-copy="${esc(projectInviteUrl(i.code))}">${icon("Copy", 13)}ลิงก์</button>
-        </label>`).join("") : `<p class="muted small">ยังไม่มีเพื่อน ชวนด้านล่างได้เลย</p>`;
-      return;
-    }
-    $("#memberList").innerHTML = `<div class="member-row"><span class="grow"><b>${esc(info.owner)}</b><small>เจ้าของโปรเจกต์</small></span></div>` +
-      info.members.map((m) => `
-        <div class="member-row">
-          <span class="grow"><b>${esc(m.name)}${m.you ? " (คุณ)" : ""}</b><small>ชวนโดย ${esc(m.invitedBy || "-")}</small></span>
-          ${m.code ? `<button type="button" class="btn small ghost" data-copy="${esc(projectInviteUrl(m.code))}">${icon("Copy", 13)}ลิงก์</button>` : ""}
-        </div>`).join("");
-  }
-  const projectInviteUrl = (code) => `${isGuest() ? location.origin : shareBase()}/i/${code}${project ? `?p=${encodeURIComponent(project.slug)}` : ""}`;
-
-  $("#membersBtn").addEventListener("click", async () => {
-    if (!project) return;
-    $("#membersProject").textContent = project.name;
-    $("#newLinks").innerHTML = "";
-    $("#memberNote").textContent = config.serverHasKey ? "" : "ยังไม่ได้ตั้ง key สำหรับเพื่อน (ปุ่ม แชร์ให้เพื่อน) เพื่อนจะดูได้แต่สั่งงานไม่ได้";
-    await renderMembers();
-    $("#members").showModal();
-  });
-  $("#memberList").addEventListener("change", async (e) => {
-    const box = e.target.closest("[data-member]");
-    if (!box || !project) return;
-    const { members } = await api(`/api/projects/${encodeURIComponent(project.slug)}/members`, { code: box.dataset.member, add: box.checked });
-    renderProjectActions({ ...projectMeta, members });
-  });
-  for (const id of ["#memberList", "#newLinks"]) {
-    $(id).addEventListener("click", (e) => {
-      const c = e.target.closest("[data-copy]");
-      if (c) { e.preventDefault(); copyText(c.dataset.copy, c); }
-    });
-  }
-  $("#createMember").addEventListener("click", async () => {
-    if (!project) return;
-    const names = $("#memberName").value.trim() || "เพื่อน";
-    const res = await fetch(`/api/projects/${encodeURIComponent(project.slug)}/invite`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ names, limit: Number($("#memberLimit").value) || 100000 }),
-    });
-    const data = await res.json();
-    const created = data.created || [];
-    $("#newLinks").innerHTML = created.map((c) => `
-      <div class="member-row"><span class="grow"><b>${esc(c.name)}</b><small>${fmt(c.limit)} tokens</small><code class="link-box">${esc(projectInviteUrl(c.code))}</code></span>
-      <button type="button" class="btn small ghost" data-copy="${esc(projectInviteUrl(c.code))}">${icon("Copy", 13)}คัดลอก</button></div>`).join("");
-    if (created.length) await copyText(created.map((c) => `${c.name}: ${projectInviteUrl(c.code)}`).join("\n"));
-    $("#memberNote").textContent = data.error
-      ? `${created.length ? `สร้างได้ ${created.length} คน · ` : ""}${data.error}`
-      : `สร้างลิงก์ ${created.length} คนแล้ว และคัดลอกทั้งหมดไว้ให้ ส่งให้แต่ละคนเปิดได้เลย`;
-    $("#memberName").value = "";
-    const meta = await api(`/api/projects/${encodeURIComponent(project.slug)}`);
-    renderProjectActions(meta);
-    await renderMembers();
-    loadProjects();
-  });
-
-  $("#deleteProjectBtn").addEventListener("click", async () => {
-    if (!project) return;
-    if (!confirm(`ลบโปรเจกต์ "${project.name}" พร้อมไฟล์และประวัติทั้งหมด? กู้คืนไม่ได้`)) return;
-    try {
-      await fetch(`/api/projects/${encodeURIComponent(project.slug)}`, { method: "DELETE" }).then(async (r) => { if (!r.ok) throw new Error((await r.json()).error); });
-      newProject();
-      await loadProjects();
-    } catch (err) {
-      chatSys(err.message, "bad", "OctagonAlert");
-    }
-  });
-
-  function renderJobs(meta, activeId) {
-    renderProjectActions(meta);
-    const jobs = meta?.jobs || [];
-    $("#jobBar").hidden = !project;
-    $("#jobPills").innerHTML = jobs.map((j, i) => `<button data-job="${esc(j.id)}" class="${j.id === activeId ? "active" : ""}" title="${esc(j.task || "")}"><span class="sdot ${esc(j.status || "")}"></span><span>รอบ ${i + 1} · ${esc((j.task || "").slice(0, 28))}</span></button>`).join("");
-    $("#openDemoTop").href = project?.demoPath || "#";
-    // The latest round stopped part-way: offer to continue it instead of starting over.
-    const last = jobs.at(-1);
-    latestJobId = last?.id || null;
-    resumable = last && !meta?.runningJob && RESUMABLE.includes(last.status) ? last.id : null;
-    $("#resumeBtn").hidden = !resumable;
-  }
-  const RESUMABLE = ["interrupted", "failed", "cancelled", "out-of-tokens"];
-  let resumable = null, latestJobId = null;
-  $("#resumeBtn").addEventListener("click", async () => {
-    if (!project || !resumable) return;
-    if (!connected()) { fillSettings(); $("#settings").showModal(); return; }
-    try {
-      const data = await api("/api/jobs", { projectSlug: project.slug, resumeJobId: resumable, task: "", ...llmBody() });
-      resetView();
-      renderJobs(await api(`/api/projects/${encodeURIComponent(project.slug)}`), data.id);
-      connect(data.id, project.slug);
-      loadProjects();
-    } catch (err) {
-      chatSys(err.message, "bad", "OctagonAlert");
-    }
-  });
-  $("#jobPills").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-job]");
-    if (!b || !project) return;
-    resetView();
-    connect(b.dataset.job, project.slug);
-    $("#jobPills").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
-  });
-
-  async function openProject(slug) {
-    let meta;
-    try { meta = await api(`/api/projects/${encodeURIComponent(slug)}`); } catch (err) { chatSys(err.message, "bad", "OctagonAlert"); return; }
-    stopStream();
-    resetView();
-    project = { slug, name: meta.name || slug, demoPath: meta.demoPath };
-    store.set("agentOffice.project", slug, sessionStorage);
-    setHeader();
-    const jobId = meta.runningJob || meta.jobs?.at(-1)?.id;
-    renderJobs(meta, jobId);
-    if (jobId) connect(jobId, slug);
-    else chatSys("โปรเจกต์นี้ยังไม่มีประวัติงาน", "", "Info");
-    $("#task").value = "";
-  }
-
-  function newProject() {
-    stopStream();
-    resetView();
-    project = null;
-    store.del("agentOffice.project", sessionStorage);
-    $("#projectName").value = "";
-    $("#task").value = "";
-    $("#jobBar").hidden = true;
-    renderProjectActions(null);
-    setHeader();
-    setRunning(false);
-  }
-
-  // ---------- event playback ----------
-  // Events play in order; walking and talking take real time so the story is watchable.
-  // Events older than the moment we connected (history, reloads) are replayed fast.
-  const queue = [];
-  let pumping = false, connectedAt = 0, generation = 0;
-  function enqueue(e, gen) { queue.push([e, gen]); if (!pumping) pump(); }
-  async function pump() {
-    pumping = true;
-    while (queue.length) {
-      const [e, gen] = queue.shift();
-      if (gen !== generation) continue; // from a stream we already left
-      office.fast = e.t < connectedAt - 1500;
-      try { await handle(e); } catch (err) { console.error(err, e); }
-    }
-    office.fast = false;
-    pumping = false;
-  }
-  const wait = (ms) => (office.fast || document.hidden ? null : sleep(ms));
-  // Wait for characters to finish walking, but never stall the story: animations
-  // pause in a hidden tab, and replays must not wait at all.
-  const arrive = (ids) => (office.fast || document.hidden ? null : Promise.race([office.arrived(ids), sleep(4000)]));
-
-  async function handle(e) {
-    switch (e.type) {
-      case "project":
-        if (!project || project.slug !== e.slug) project = { slug: e.slug, name: e.name, demoPath: e.demoPath };
-        $("#saveLocalBtn").hidden = false;
-        $("#zipBtn").hidden = false;
-        $("#zipBtn").href = `/api/projects/${encodeURIComponent(e.slug)}/project.zip`;
-        if (e.resume) chatSys("ทำงานต่อจากรอบที่ค้าง", "", "Play");
-        else chatUser(e.task, e.by, e.mode, e.focus);
-        break;
-      case "init":
-        break;
-      case "route":
-        routeCard(e);
-        await wait(600);
-        break;
-      case "phase": {
-        phaseState[e.id] = { state: e.state, note: e.note };
-        renderPipeline();
-        const p = PHASES.find((x) => x.id === e.id);
-        if (e.state === "active" && p && !(e.id === "build" && e.note)) chatSys(`${p.label}${e.note ? ` · ${e.note}` : ""}`, "", p.icon);
-        await wait(120);
-        break;
-      }
-      case "move":
-        office.moveTo(e.agent, e.to);
-        await wait(50);
-        break;
-      case "status": {
-        office.setStatus(e.agent, e.state);
-        setMember(e.agent, e.state);
-        const s = stream(e.agent);
-        if (e.state === "thinking") { s.pre.textContent = ""; s.box.classList.remove("done"); $("#liveView").prepend(s.box); }
-        s.state.textContent = STATUS_TH[e.state] || "";
-        s.box.classList.toggle("done", e.state === "idle");
-        break;
-      }
-      case "delta": {
-        const s = stream(e.agent);
-        s.pre.textContent += e.text;
-        if (s.pre.textContent.length > 60000) s.pre.textContent = s.pre.textContent.slice(-40000);
-        s.pre.scrollTop = s.pre.scrollHeight;
-        break;
-      }
-      case "say": {
-        const to = e.to === "all" ? ORDER.filter((id) => id !== e.from) : e.to;
-        await arrive([e.from]);
-        office.say(e.from, e.text, nameList(e.to));
-        office.react(to || [], "nod");
-        chatMsg(e.from, e.to, e.text);
-        await wait(Math.min(5000, 1500 + e.text.length * 26));
-        break;
-      }
-      case "doc":
-        docs[e.name] = { content: e.content, by: e.by, version: (docs[e.name]?.version || 0) + 1 };
-        if (e.name !== "report") { currentDoc = e.name; renderDocs(); markWork(); }
-        if (e.name === "spec" || e.name === "design") office.boardDone(true);
-        break;
-      case "tasks":
-        tasks = e.tasks.map((t) => ({ ...t, state: "todo" }));
-        renderTasks();
-        markWork();
-        chatSys(`แตกงานเป็น ${tasks.length} งานย่อย`, "", "ListChecks");
-        break;
-      case "task": {
-        const t = tasks.find((x) => x.id === e.id);
-        if (t) { t.state = e.state; renderTasks(); }
-        break;
-      }
-      case "file":
-        files[e.path] = { content: e.content, by: e.by, version: (files[e.path]?.version || 0) + 1 };
-        if (!currentFile || currentFile === e.path) showFile(e.path); else renderTree(e.path);
-        clearTimeout(previewTimer);
-        previewTimer = setTimeout(() => refreshPreview(false), 1200);
-        break;
-      case "test": {
-        await arrive(["qa"]);
-        rounds.push(e);
-        renderTests();
-        office.lab(e.ok ? "pass" : "fail", e);
-        if (e.ok) { office.react(["qa"], "jump"); office.emote("qa", "PartyPopper", "good"); }
-        else { office.react(["qa"], "shake"); office.emote("qa", "TriangleAlert", "bad"); }
-        chatSys(e.ok ? `รอบ ${e.round}: ผ่านทั้งหมด ${e.passed}/${e.total}` : `รอบ ${e.round}: ไม่ผ่าน ${e.failed} จาก ${e.total} รายการ`, e.ok ? "good" : "bad", e.ok ? "CircleCheck" : "CircleX");
-        await wait(1300);
-        break;
-      }
-      case "budget":
-        if (!office.fast) renderBudget(e);
-        break;
-      case "done":
-        if (e.answer) break;
-        if (e.quick) {
-          if (e.success) { office.react(e.changed?.length ? ["architect"] : [], "jump"); chatSys(`แก้เสร็จ · ${e.changed.length} ไฟล์`, "good", "CircleCheck"); }
-          refreshPreview(false);
-          break;
-        }
-        await arrive(["pm"]);
-        if (e.success) {
-          if (!office.fast) office.confetti();
-          office.react(ORDER, "jump");
-          chatSys(`ส่งมอบงานสำเร็จ · ${e.fileCount} ไฟล์ · แก้บั๊ก ${e.fixRounds} รอบ`, "good", "BadgeCheck");
-        } else {
-          chatSys("ทีมยังทำงานไม่ผ่านทั้งหมด ดูผลเทสต์และสรุปในแท็บงาน", "bad", "TriangleAlert");
-        }
-        if (docs.summary) { currentDoc = "summary"; renderDocs(); markWork(); }
-        if (e.preview && project) chatSys(`ลิงก์เดโม่: ${shareUrl(project.demoPath)}`, "good", "Link");
-        refreshPreview(false);
-        await wait(2000);
-        break;
-      case "notice":
-        chatSys(e.message, "", "RotateCw");
-        break;
-      case "error":
-        chatSys(e.message, "bad", "OctagonAlert");
-        ORDER.forEach((id) => { office.setStatus(id, "idle"); setMember(id, "idle"); });
-        if (e.resumable) office.lab("idle");
-        // Only the latest round can be continued: resuming an older one would overwrite newer work.
-        if (e.resumable && latestJobId && jobId !== latestJobId) chatSys("รอบนี้ทำต่อไม่ได้แล้ว เพราะมีรอบที่ใหม่กว่าทำงานต่อจากไฟล์ล่าสุดไปแล้ว ถ้ายังขาดอะไร ให้สั่งงานเพิ่มได้เลย", "", "Info");
-        break;
-      case "end":
-        finishStream();
-        break;
-    }
-  }
-
-  // ---------- connect / start / cancel ----------
-  let source = null, jobId = null;
-  function setRunning(on) {
-    office.busy = on;
-    $("#startBtn").disabled = on;
-    $("#startBtn").querySelector("span").textContent = on ? "ทีมกำลังทำงาน…" : (project ? "สั่งงานเพิ่ม" : "มอบหมายงาน");
-    $("#cancelBtn").hidden = !on;
-  }
-  function stopStream() {
-    source?.close();
-    source = null;
-    generation++;
-    queue.length = 0;
-  }
-  async function finishStream() {
-    source?.close();
-    source = null;
-    setRunning(false);
-    await loadProjects();
-    if (project) {
-      try { renderJobs(await api(`/api/projects/${encodeURIComponent(project.slug)}`), jobId); } catch { /* ignore */ }
-    }
-  }
-
-  function resetView(keepChat = false) {
-    for (const o of [phaseState, docs, files, streams]) for (const k of Object.keys(o)) delete o[k];
-    tasks = []; rounds.length = 0; currentDoc = null; currentFile = null;
-    renderPipeline(); renderDocs(); renderTree();
-    $("#taskList").innerHTML = `<p class="muted small">Tech Lead จะแตกงานหลังวิเคราะห์ requirement</p>`;
-    $("#testView").innerHTML = `<div class="empty">ยังไม่ได้รันเทสต์</div>`;
-    $("#liveView").innerHTML = `<div class="empty">ข้อความที่ agent กำลังพิมพ์จะแสดงที่นี่แบบสด</div>`;
-    $("#fileHead").innerHTML = ""; $("#fileBody").textContent = "";
-    for (const id of ["#zipBtn", "#openPreview", "#saveLocalBtn", "#copyLink", "#demoLink", "#appTunnel"]) $(id).hidden = true;
-    $("#reloadPreview").disabled = true;
-    $("#previewInfo").textContent = "ลิงก์เดโม่จะใช้ได้เมื่อทีมสร้างไฟล์ HTML";
-    $("#previewFrame").removeAttribute("src");
-    if (!keepChat) chat.innerHTML = "";
-    office.lab("idle");
-    office.boardDone(false);
-    ORDER.forEach((id) => { office.setStatus(id, "idle"); setMember(id, "idle"); });
-  }
-
-  function connect(id, slug) {
-    stopStream();
-    const gen = generation;
-    jobId = id;
-    connectedAt = Date.now();
-    setRunning(true);
-    let lastSeq = -1;
-    source = new EventSource(`/api/jobs/${id}/events?project=${encodeURIComponent(slug)}`);
-    source.onmessage = (m) => {
-      const e = JSON.parse(m.data);
-      // After a reconnect the server may replay the whole log: skip what we already have.
-      if (typeof e.seq === "number") {
-        if (e.seq <= lastSeq) return;
-        lastSeq = e.seq;
-      }
-      if (e.type === "end") source?.close(); // otherwise EventSource reconnects forever
-      enqueue(e, gen);
-    };
-    source.onerror = () => {
-      if (source && source.readyState === EventSource.CLOSED && gen === generation) {
-        chatSys("โหลดประวัติงานนี้ไม่ได้", "bad", "WifiOff");
-        setRunning(false);
-      }
-    };
-  }
-
-  $("#taskForm").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const task = $("#task").value.trim();
-    if (!task) { $("#task").focus(); return; }
-    if (!connected()) { fillSettings(); $("#settings").showModal(); return; }
-    const followUp = project?.slug;
-    try {
-      const data = await api("/api/jobs", {
-        task, files: attached, projectSlug: followUp || undefined,
-        mode: followUp ? mode : "full", focus: followUp ? [...focus] : [],
-        projectName: followUp ? undefined : $("#projectName").value.trim(), ...llmBody(),
-      });
-      resetView(Boolean(followUp));
-      focus.clear(); renderFocus();
-      attached = []; $("#attachInfo").textContent = "";
-      const meta = await api(`/api/projects/${encodeURIComponent(data.slug)}`);
-      project = { slug: data.slug, name: meta.name || data.slug, demoPath: meta.demoPath };
-      store.set("agentOffice.project", data.slug, sessionStorage);
-      setHeader();
-      renderJobs(meta, data.id);
-      $("#task").value = "";
-      connect(data.id, data.slug);
-      loadProjects();
-    } catch (err) {
-      chatSys(err.message, "bad", "OctagonAlert");
-    }
-  });
-
-  // ---------- chat controls: how much of the team, which files ----------
-  let mode = "auto", modeTouched = false;
-  const focus = new Set();
-  const MODE_HINT = {
-    auto: "Archie อ่านข้อความแล้วเลือกเองว่าต้องใช้ใคร",
-    quick: "ใช้เฉพาะคนที่จำเป็น แก้เฉพาะส่วนที่บอก",
-    full: "ทั้งทีม ตั้งแต่ requirement จนส่งมอบ",
-  };
-  function setMode(m, byUser = true) {
-    mode = m;
-    if (byUser) modeTouched = true;
-    for (const b of document.querySelectorAll("#modeSeg button")) b.classList.toggle("on", b.dataset.mode === m);
-    $("#modeHint").textContent = project ? MODE_HINT[m] : "โปรเจกต์ใหม่ ทีมทำทั้งโครงให้";
-  }
-  $("#modeSeg").addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-mode]");
-    if (b && !b.disabled) setMode(b.dataset.mode);
-  });
-  function renderFocus() {
-    const box = $("#focusChips");
-    box.hidden = !focus.size || !project;
-    box.innerHTML = focus.size ? `<span>ไฟล์ที่จะแก้:</span>${[...focus].map((p) => `<span class="focus-chip">${esc(p)}<button type="button" data-unfocus="${esc(p)}" aria-label="เอาออก">${icon("X", 12)}</button></span>`).join("")}` : "";
-  }
-  function addFocus(p) {
-    focus.add(p);
-    if (mode !== "quick") setMode("quick");
-    renderFocus();
-  }
-  $("#focusChips").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-unfocus]");
-    if (b) { focus.delete(b.dataset.unfocus); renderFocus(); }
-  });
-  $("#editFileBtn").addEventListener("click", () => {
-    if (!currentFile) return;
-    addFocus(currentFile);
-    $(".tab[data-tab=chat]").click();
-    $("#task").focus();
-  });
-  function renderPick() {
-    const q = $("#pickFilter").value.trim().toLowerCase();
-    const list = Object.keys(files).filter((p) => !/^(data|\.agent-office)\//.test(p) && p.toLowerCase().includes(q)).sort();
-    $("#pickList").innerHTML = list.length
-      ? list.map((p) => `<label><input type="checkbox" data-pick="${esc(p)}" ${focus.has(p) ? "checked" : ""}>${icon(fileIcon(p), 13)}${esc(p)}</label>`).join("")
-      : `<p class="muted small">ยังไม่มีไฟล์ในโปรเจกต์นี้</p>`;
-  }
-  $("#pickFileBtn").addEventListener("click", () => { $("#pickFilter").value = ""; renderPick(); $("#pickFile").showModal(); });
-  $("#pickFilter").addEventListener("input", renderPick);
-  $("#pickList").addEventListener("change", (e) => {
-    const b = e.target.closest("[data-pick]");
-    if (!b) return;
-    if (b.checked) addFocus(b.dataset.pick); else { focus.delete(b.dataset.pick); renderFocus(); }
-  });
-  // Enter sends, Shift+Enter makes a new line (not while typing Thai with an IME).
-  $("#task").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#taskForm").requestSubmit(); }
-  });
-  $("#task").addEventListener("input", () => { const t = $("#task"); t.style.height = "auto"; t.style.height = Math.min(200, t.scrollHeight) + "px"; });
-  setMode("full", false);
-
-  $("#cancelBtn").addEventListener("click", () => { if (jobId) fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" }); });
-
-  // ---------- boot ----------
-  renderPipeline();
-  renderDocs();
-  api("/api/config").then(async (cfg) => {
-    config = cfg;
-    if (cfg.role === "none") {
-      $("#locked").hidden = false;
-      // On the owner's own computer: sign in with the owner token.
-      $("#ownerForm").hidden = !cfg.onThisMachine;
-      $("#ownerForm").addEventListener("submit", async (ev) => {
-        ev.preventDefault();
-        try {
-          await api("/api/owner-login", { token: $("#ownerToken").value.trim() });
-          location.reload();
-        } catch (err) {
-          $("#ownerMsg").textContent = err.message;
-        }
-      });
-      return;
-    }
-    document.body.classList.toggle("guest", cfg.role === "guest");
-    $("#shareBtn").hidden = cfg.role !== "owner";
-    $("#guestChip").hidden = cfg.role !== "guest";
-    $("#guestName").textContent = cfg.userName;
-    if (!settings.model) settings.model = cfg.defaultModel;
-    renderBudget(cfg.usage);
-    await loadProjects();
-    // An invite link for one project lands on /#p=<slug>.
-    const fromLink = decodeURIComponent((location.hash.match(/^#p=(.+)$/) || [])[1] || "");
-    if (fromLink) history.replaceState(null, "", location.pathname);
-    // A friend who was added to a project (even via a plain invite link) lands in it.
-    const shared = isGuest() ? projectList.find((p) => p.owner !== config.userId)?.slug : null;
-    const last = fromLink || store.get("agentOffice.project", sessionStorage) || shared;
-    if (last && projectList.some((p) => p.slug === last)) openProject(last);
-    else setHeader();
-    if (!connected()) chatSys(isGuest() ? "เจ้าของเครื่องยังไม่ได้เปิดให้ใช้ Claude สำหรับเพื่อน" : "ยังไม่ได้เชื่อม Claude เปิดหน้าตั้งค่า (ไอคอนเฟือง) เพื่อเลือกวิธีเชื่อมต่อ", "", "Plug");
-  });
+  connect();
 })();

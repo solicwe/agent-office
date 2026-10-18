@@ -1,5 +1,11 @@
 node_modules
 .env
+# audit logs stay on the machine; only their hashes go to branch audit-log
+logs/
+# old version's runtime folders
 projects/
 data/
-.claude/
+# Claude Code: share the roles and the hooks, keep personal files local
+.claude/*
+!.claude/agents/
+!.claude/settings.json

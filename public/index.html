@@ -4,61 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Office</title>
-  <meta name="description" content="ทีม AI ที่วิเคราะห์ เขียนโค้ด ทดสอบ รีวิว และแก้บั๊ก จนกว่างานจะผ่าน">
+  <meta name="description" content="หน้าต่างข้าง Claude Code: ดูทีม agent ทำงานแบบสด พร้อม audit log ที่ตรวจสอบได้">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=21">
+  <link rel="stylesheet" href="style.css?v=30">
   <script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
 </head>
 <body>
-<div class="app">
-  <aside id="sidebar" class="sidebar" aria-label="โปรเจกต์">
-    <div class="side-head">
-      <span class="mark"><i data-icon="Building2" data-size="18"></i></span>
-      <b>Agent Office</b>
-      <button id="closeSidebar" class="btn icon-only ghost only-mobile" aria-label="ปิด"><i data-icon="X"></i></button>
-    </div>
-    <button id="newProjectBtn" class="btn primary block"><i data-icon="Plus"></i>โปรเจกต์ใหม่</button>
-    <div class="side-label">โปรเจกต์ทั้งหมด</div>
-    <nav id="projectNav" class="project-nav"><p class="muted small pad">ยังไม่มีโปรเจกต์</p></nav>
-  </aside>
-  <div id="sidebarScrim" class="scrim" hidden></div>
-
-  <div class="main">
+  <div class="main solo">
     <header class="topbar">
       <div class="brand">
-        <button id="openSidebar" class="btn icon-only only-mobile" aria-label="เปิดรายการโปรเจกต์"><i data-icon="PanelLeft" data-size="18"></i></button>
         <div>
-          <h1 id="projectTitle">โปรเจกต์ใหม่</h1>
-          <p id="projectSub">ทีม AI ที่วิเคราะห์ เขียนโค้ด ทดสอบ รีวิว และแก้บั๊ก จนกว่างานจะผ่าน</p>
+          <h1>Agent Office</h1>
+          <p>สั่งงานใน Claude Code แล้วดูทีมทำงานที่นี่ ทุกขั้นถูกบันทึกเป็น audit log</p>
         </div>
       </div>
       <div class="meters">
-        <span id="tokenChip" class="chip token-chip"><i data-icon="Activity"></i><span id="tokenText">ใช้ไปแล้ว 0 tokens</span></span>
-        <span id="guestChip" class="chip" hidden><i data-icon="User"></i><span id="guestName"></span></span>
-        <button id="shareBtn" class="btn small ghost" hidden><i data-icon="UserPlus"></i>แชร์ให้เพื่อน</button>
-        <button id="settingsBtn" class="btn icon-only" aria-label="ตั้งค่า" title="ตั้งค่า"><i data-icon="Settings" data-size="18"></i></button>
+        <span id="connChip" class="chip"><i data-icon="Unplug"></i><span>รอ Claude Code</span></span>
+        <span id="tokenChip" class="chip" hidden><i data-icon="Activity"></i><span></span></span>
       </div>
     </header>
-
-    <div id="jobBar" class="job-bar" hidden>
-      <span class="muted small">รอบงานในโปรเจกต์นี้</span>
-      <div id="jobPills" class="job-pills"></div>
-      <span class="row-gap push">
-        <span id="sharedBadge" class="chip" hidden><i data-icon="Users"></i><span></span></span>
-        <button id="resumeBtn" class="btn small primary" hidden><i data-icon="Play"></i>ทำงานต่อจากที่ค้าง</button>
-        <button id="membersBtn" class="btn small ghost" hidden><i data-icon="UserPlus"></i>ชวนเพื่อนร่วมแก้</button>
-        <button id="copyLinkTop" class="btn small ghost"><i data-icon="Link"></i>คัดลอกลิงก์เดโม่</button>
-        <a id="openDemoTop" class="btn small ghost" target="_blank" rel="noopener"><i data-icon="ExternalLink"></i>เปิดเดโม่</a>
-        <button id="deleteProjectBtn" class="btn small ghost danger" hidden title="ลบโปรเจกต์นี้"><i data-icon="Trash2"></i>ลบ</button>
-      </span>
-    </div>
-
-
-    <ol id="pipeline" class="pipeline" aria-label="ขั้นตอนการทำงาน"></ol>
 
     <main class="layout">
       <section class="office-col">
@@ -68,294 +34,44 @@
 
       <aside class="side">
         <nav class="tabs" role="tablist">
-          <button class="tab active" data-tab="chat"><i data-icon="MessagesSquare"></i><span>แชท</span></button>
-          <button class="tab" data-tab="work"><i data-icon="ListChecks"></i><span>งาน</span><b class="dot" hidden></b></button>
-          <button class="tab" data-tab="files"><i data-icon="FolderTree"></i><span>ไฟล์</span><b class="count" id="fileCount" hidden></b></button>
-          <button class="tab" data-tab="tests"><i data-icon="FlaskConical"></i><span>เทสต์</span></button>
-          <button class="tab" data-tab="preview"><i data-icon="Eye"></i><span>Preview</span></button>
-          <button class="tab" data-tab="live"><i data-icon="SquareTerminal"></i><span>Live</span></button>
+          <button class="tab active" data-tab="live"><i data-icon="Radio"></i><span>สด</span></button>
+          <button class="tab" data-tab="audit"><i data-icon="ShieldCheck"></i><span>Audit log</span></button>
+          <button class="tab" data-tab="roles"><i data-icon="Users"></i><span>Roles</span><b class="count" id="roleCount"></b></button>
         </nav>
 
-        <div class="panel active" id="panel-chat">
-          <div id="chat" class="chat"><div class="empty">คุยกับทีมได้เลย<br>บอกว่าอยากได้เว็บแบบไหน หรืออยากแก้ส่วนไหน ทีมจะเลือกเองว่าต้องใช้ใครบ้าง</div></div>
-          <form id="taskForm" class="chat-input">
-            <div class="mode-row">
-              <div class="mode-seg" id="modeSeg" role="radiogroup" aria-label="วิธีทำงาน">
-                <button type="button" data-mode="auto" class="on" title="Archie อ่านข้อความแล้วเลือกเองว่าต้องใช้ใครบ้าง"><i data-icon="Sparkles"></i>ทีมเลือกเอง</button>
-                <button type="button" data-mode="quick" title="แก้หรือเพิ่มเฉพาะส่วน ใช้เฉพาะคนที่จำเป็น"><i data-icon="PencilLine"></i>แก้เฉพาะส่วน</button>
-                <button type="button" data-mode="full" title="ทั้งทีม ตั้งแต่ requirement ออกแบบ เขียนโค้ด เทสต์ จนส่งมอบ"><i data-icon="Layers"></i>ทำทั้งโครง</button>
-              </div>
-              <button type="button" id="briefBtn" class="btn small ghost"><i data-icon="MessageCircleQuestion"></i>ช่วยคิด</button>
-            </div>
-            <span id="taskLabel" class="sr-only">ข้อความถึงทีม</span>
-            <div id="focusChips" class="focus-chips" hidden></div>
-            <div class="examples" id="examples"></div>
-            <div class="input-box">
-              <textarea id="task" rows="2" aria-labelledby="taskLabel" placeholder="พิมพ์คุยกับทีม เช่น สร้างเว็บร้านค้าออนไลน์ หรือ ปุ่มสั่งซื้อในหน้าตะกร้ากดไม่ได้"></textarea>
-              <button type="button" id="cancelBtn" class="btn icon-only ghost" hidden title="หยุดงาน" aria-label="หยุดงาน"><i data-icon="Square"></i></button>
-              <button type="submit" id="startBtn" class="btn primary icon-send" title="ส่ง (Enter)" aria-label="ส่ง"><i data-icon="Send"></i><span class="sr-only">ส่ง</span></button>
-            </div>
-            <div class="composer-row">
-              <label class="name-field" id="nameField" title="ชื่อโฟลเดอร์ที่จะบันทึกโปรเจกต์ และใช้เป็นลิงก์เดโม่">
-                <i data-icon="FolderPen"></i>
-                <input id="projectName" placeholder="ชื่อโปรเจกต์ (ไม่บังคับ)" maxlength="48" autocomplete="off">
-              </label>
-              <label class="file-btn" title="แนบไฟล์โปรเจกต์เดิมให้ทีมแก้ไข">
-                <i data-icon="Paperclip"></i><span>แนบไฟล์</span>
-                <input type="file" id="fileInput" multiple hidden>
-              </label>
-              <label class="file-btn" title="แนบทั้งโฟลเดอร์">
-                <i data-icon="FolderUp"></i><span>โฟลเดอร์</span>
-                <input type="file" id="folderInput" webkitdirectory multiple hidden>
-              </label>
-              <button type="button" id="pickFileBtn" class="file-btn as-btn" hidden title="เลือกไฟล์ในโปรเจกต์ที่อยากให้แก้"><i data-icon="FileCode"></i><span>เลือกไฟล์ที่จะแก้</span></button>
-              <span id="attachInfo" class="muted small"></span>
-              <span id="modeHint" class="muted small push"></span>
-            </div>
-          </form>
-        </div>
-
-        <div class="panel" id="panel-work">
-          <div class="work">
-            <h3 class="section-title">งานย่อย</h3>
-            <div id="taskList" class="task-list"><p class="muted small">Tech Lead จะแตกงานหลังวิเคราะห์ requirement</p></div>
-            <h3 class="section-title">เอกสาร</h3>
-            <div id="docTabs" class="seg"></div>
-            <div id="docView" class="doc"></div>
+        <div class="panel active" id="panel-live">
+          <div id="feed" class="feed">
+            <div class="empty">ยังไม่มีงาน<br>เปิด Claude Code ในโฟลเดอร์นี้ แล้วพิมพ์งานได้เลย ตัวละครจะขยับตามที่ Claude ทำจริง</div>
           </div>
         </div>
 
-        <div class="panel" id="panel-files">
-          <div class="files-bar">
-            <span class="muted small path" id="filesInfo">ยังไม่มีไฟล์</span>
-            <span class="row-gap">
-              <button id="saveLocalBtn" class="btn small ghost" hidden title="เลือกโฟลเดอร์ในเครื่องแล้วบันทึกทุกไฟล์ลงไป"><i data-icon="HardDriveDownload"></i>บันทึกลงโฟลเดอร์</button>
-              <a id="zipBtn" class="btn small" hidden><i data-icon="Download"></i>.zip</a>
-            </span>
+        <div class="panel" id="panel-audit">
+          <div class="audit-bar">
+            <select id="sessionSelect" aria-label="เลือก session"></select>
+            <button id="refreshAudit" class="btn small ghost icon-only" title="โหลดใหม่" aria-label="โหลดใหม่"><i data-icon="RotateCw"></i></button>
           </div>
-          <div class="files">
-            <ul id="fileTree" class="file-tree"></ul>
-            <div class="file-view">
-              <div class="file-head"><span id="fileHead" class="file-name"></span><button type="button" id="editFileBtn" class="btn small ghost" hidden title="ให้ทีมแก้เฉพาะไฟล์นี้"><i data-icon="PencilLine"></i>แก้ไฟล์นี้</button><button type="button" id="wrapToggle" class="btn small ghost" title="สลับการตัดบรรทัด"><i data-icon="WrapText"></i></button></div>
-              <pre id="fileBody" class="code wrap"></pre>
-            </div>
+          <div id="verifyBox" class="verify" hidden></div>
+          <div class="audit-actions" id="auditActions" hidden>
+            <a id="exportJson" class="btn small"><i data-icon="FileJson"></i>Export .json</a>
+            <a id="exportMd" class="btn small"><i data-icon="FileText"></i>Export .md</a>
           </div>
+          <div id="timeline" class="timeline"><div class="empty">ยังไม่มี session</div></div>
         </div>
 
-        <div class="panel" id="panel-tests">
-          <div id="testView" class="tests"><div class="empty">ยังไม่ได้รันเทสต์</div></div>
-        </div>
-
-        <div class="panel" id="panel-preview">
-          <div class="files-bar share-bar">
-            <div class="share">
-              <span class="muted small" id="previewInfo">ลิงก์เดโม่จะใช้ได้เมื่อทีมสร้างไฟล์ HTML</span>
-              <code id="demoLink" class="link-box" hidden></code>
-            </div>
-            <span class="row-gap">
-              <button id="reloadPreview" class="btn small ghost icon-only" disabled title="รีเฟรช" aria-label="รีเฟรช"><i data-icon="RotateCw"></i></button>
-              <button id="restartApp" class="btn small ghost" hidden title="ปิดแล้วเปิดเซิร์ฟเวอร์ของแอปใหม่"><i data-icon="Power"></i>รีสตาร์ทแอป</button>
-              <button id="appTunnel" class="btn small ghost" hidden title="ให้แอปนี้มีลิงก์ https ของตัวเอง คนนอกบ้านเปิดและ login ได้"><i data-icon="Globe"></i><span>แชร์แอปนี้ออกนอกบ้าน</span></button>
-              <button id="copyLink" class="btn small ghost" hidden><i data-icon="Copy"></i>คัดลอกลิงก์</button>
-              <a id="openPreview" class="btn small" target="_blank" rel="noopener" hidden><i data-icon="ExternalLink"></i>เปิด</a>
-            </span>
+        <div class="panel" id="panel-roles">
+          <div class="roles">
+            <p class="muted small" id="rolesDir"></p>
+            <div id="roleErrors"></div>
+            <div id="roleList"></div>
+            <p class="muted small">เพิ่ม role: คัดลอก <code>docs/agent-template.md</code> ไปไว้ใน <code>.claude/agents/</code> แก้ชื่อและคำสั่ง แล้วบันทึก ตัวละครใหม่จะโผล่เอง (ดู TEAM_GUIDE.md)</p>
           </div>
-          <pre id="appLog" class="code app-log" hidden></pre>
-          <iframe id="previewFrame" class="preview" title="ตัวอย่างเว็บไซต์" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-same-origin allow-downloads"></iframe>
-        </div>
-
-        <div class="panel" id="panel-live">
-          <div id="liveView" class="live-wrap"><div class="empty">ข้อความที่ agent กำลังพิมพ์จะแสดงที่นี่แบบสด</div></div>
         </div>
       </aside>
     </main>
   </div>
-</div>
 
-  <div id="locked" class="locked" hidden>
-    <div class="locked-card">
-      <span class="mark"><i data-icon="Lock" data-size="20"></i></span>
-      <h2>ต้องใช้ลิงก์เชิญ</h2>
-      <p class="muted">หน้านี้เปิดได้เฉพาะเจ้าของเครื่อง หรือเพื่อนที่ได้รับลิงก์เชิญ ขอลิงก์จากเจ้าของแล้วเปิดลิงก์นั้นอีกครั้ง</p>
-      <form id="ownerForm" class="owner-form" hidden>
-        <p class="muted small">ถ้าคุณเป็นเจ้าของเครื่อง เปิดผ่าน start.bat / start.command ได้เลย หรือใส่รหัสเจ้าของจากไฟล์ data/owner-token.txt</p>
-        <div class="brief-input"><input id="ownerToken" type="password" placeholder="รหัสเจ้าของ" autocomplete="off"><button class="btn primary">เข้าสู่ระบบ</button></div>
-        <p class="small" id="ownerMsg"></p>
-      </form>
-    </div>
-  </div>
-
-  <dialog id="share" class="dialog wide">
-    <form method="dialog" novalidate>
-      <header class="dialog-head">
-        <h2><i data-icon="UserPlus"></i>แชร์ให้เพื่อนใช้</h2>
-        <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
-      </header>
-      <p class="muted small">เพื่อนที่เปิดลิงก์เชิญจะใช้ทีม AI บนเครื่องนี้ได้ โดยหักโทเค็นตามโควตาที่ตั้งให้แต่ละคน เห็นเฉพาะโปรเจกต์ของตัวเองและโปรเจกต์ที่ถูกชวนเข้าไป ยกเลิกลิงก์ได้ทุกเมื่อ</p>
-
-      <section class="share-sec">
-        <h3 class="section-title">1. Claude ที่เพื่อนใช้</h3>
-        <p class="muted small" id="serverKeyState"></p>
-        <p class="muted small">เพื่อนใช้ SWU AI key ในไฟล์ <code>.env</code> ก่อน ถ้าไม่มีจะใช้ Anthropic API key ด้านล่าง (ไม่ใช้การล็อกอิน Claude ส่วนตัวของคุณ เพราะบัญชีส่วนบุคคลแชร์ให้คนอื่นใช้ไม่ได้)</p>
-        <div class="brief-input">
-          <input id="serverKey" type="password" placeholder="Anthropic API key สำรอง (เก็บบนเครื่องนี้ ไม่ส่งให้เพื่อน)" autocomplete="off">
-          <button type="button" id="saveServerKey" class="btn">บันทึก</button>
-        </div>
-      </section>
-
-      <section class="share-sec">
-        <h3 class="section-title">2. ที่อยู่ที่เพื่อนเปิดได้</h3>
-        <div class="tunnel-row">
-          <p class="muted small" id="tunnelState">เพื่อนในวง Wi-Fi เดียวกันเปิดได้เลย ถ้าเพื่อนอยู่นอกบ้าน กดปุ่มนี้</p>
-          <button type="button" id="tunnelToggle" class="btn"><i data-icon="Globe"></i><span>เปิดให้คนนอกบ้านเข้า</span></button>
-        </div>
-        <p class="muted small" id="tunnelHint" hidden></p>
-        <label class="muted small">ที่อยู่ในลิงก์เชิญ<input id="shareBase" placeholder="http://192.168.x.x:3000"></label>
-      </section>
-
-      <section class="share-sec">
-        <h3 class="section-title">3. สร้างลิงก์เชิญ</h3>
-        <label class="check" id="inviteToProjectRow" hidden><input type="checkbox" id="inviteToProject" checked> ให้เพื่อนเข้าโปรเจกต์ที่เปิดอยู่ด้วย: <b id="inviteProjectName"></b></label>
-        <p class="muted small" id="inviteNoProject" hidden>ยังไม่ได้เปิดโปรเจกต์ ลิงก์นี้ให้เพื่อนเริ่มโปรเจกต์ของตัวเอง ถ้าจะให้เพื่อนทำโปรเจกต์เดียวกัน ให้เปิดโปรเจกต์นั้นก่อน แล้วค่อยกดปุ่มนี้</p>
-        <div class="grid2">
-          <label>ชื่อเพื่อน<input id="inviteName" placeholder="เช่น ต้น" maxlength="40"></label>
-          <label>โควตาโทเค็น<input id="inviteLimit" type="number" min="1000" step="1000" value="200000"></label>
-        </div>
-        <button type="button" id="createInvite" class="btn primary"><i data-icon="Link"></i>สร้างลิงก์</button>
-        <div id="inviteList" class="project-list"></div>
-      </section>
-    </form>
-  </dialog>
-
-  <dialog id="members" class="dialog wide">
-    <form method="dialog" novalidate>
-      <header class="dialog-head">
-        <h2><i data-icon="UserPlus"></i>ชวนเพื่อนร่วมแก้ <span id="membersProject" class="muted"></span></h2>
-        <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
-      </header>
-      <p class="muted small">คนที่อยู่ในโปรเจกต์จะเห็นโปรเจกต์นี้ในแถบซ้าย ดูทีมทำงานแบบสด ดูไฟล์ และสั่งงานเพิ่มต่อจากที่ทำค้างไว้ได้ ทุกคนในโปรเจกต์ชวนคนอื่นต่อได้</p>
-      <h3 class="section-title">คนในโปรเจกต์</h3>
-      <div id="memberList" class="project-list"></div>
-      <section class="share-sec">
-        <h3 class="section-title">ชวนเพิ่ม (หลายคนพร้อมกันได้)</h3>
-        <div class="grid2">
-          <label>ชื่อเพื่อน<input id="memberName" placeholder="เช่น ต้น, ปอย, มิ้นท์" maxlength="300"></label>
-          <label>โควตาโทเค็นต่อคน<input id="memberLimit" type="number" min="1000" step="1000" value="100000"></label>
-        </div>
-        <p class="muted small" id="memberQuota"></p>
-        <button type="button" id="createMember" class="btn primary"><i data-icon="Link"></i>สร้างลิงก์เชิญ</button>
-        <div id="newLinks" class="project-list"></div>
-        <p class="muted small" id="memberNote"></p>
-      </section>
-    </form>
-  </dialog>
-
-  <dialog id="brief" class="dialog wide">
-    <form method="dialog" novalidate id="briefForm">
-      <header class="dialog-head">
-        <h2><i data-icon="MessageCircleQuestion"></i><span id="briefTitle">ช่วยคิดโจทย์กับ Nina</span></h2>
-        <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
-      </header>
-      <div id="briefLog" class="brief-log"></div>
-      <div id="briefAsk" class="brief-ask">
-        <div id="briefOptions" class="brief-options"></div>
-        <div class="brief-input">
-          <input id="briefText" placeholder="พิมพ์คำตอบเอง (ไม่บังคับ)" autocomplete="off">
-          <button type="button" id="briefNext" class="btn primary"><i data-icon="ArrowRight"></i>ถัดไป</button>
-        </div>
-        <div class="brief-foot">
-          <span id="briefMode" class="muted small"></span>
-          <button type="button" id="briefFinish" class="btn small ghost">พอแล้ว สรุปโจทย์เลย</button>
-        </div>
-      </div>
-      <div id="briefResult" class="brief-result" hidden>
-        <label>โจทย์ที่สรุปได้ (แก้ไขได้)<textarea id="briefText2" rows="8"></textarea></label>
-        <label>ชื่อโปรเจกต์<input id="briefName" maxlength="48"></label>
-        <footer class="dialog-foot">
-          <button type="button" id="briefRestart" class="btn ghost">เริ่มถามใหม่</button>
-          <button type="button" id="briefUse" class="btn primary"><i data-icon="Check"></i>ใช้โจทย์นี้</button>
-        </footer>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="pickFile" class="dialog">
-    <form method="dialog" novalidate>
-      <header class="dialog-head">
-        <h2><i data-icon="FileCode"></i>เลือกไฟล์ที่จะให้แก้</h2>
-        <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
-      </header>
-      <input id="pickFilter" placeholder="ค้นหาไฟล์" autocomplete="off">
-      <div id="pickList" class="pick-list"></div>
-      <footer class="dialog-foot"><button value="done" class="btn primary">เสร็จ</button></footer>
-    </form>
-  </dialog>
-
-  <dialog id="settings" class="dialog">
-    <form method="dialog" novalidate id="settingsForm">
-      <header class="dialog-head">
-        <h2><i data-icon="SlidersHorizontal"></i>ตั้งค่า</h2>
-        <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
-      </header>
-      <label class="owner-only">เชื่อมต่อ Claude ผ่าน
-        <select id="setProvider">
-          <option value="local">Claude ในเครื่องนี้ (บัญชีที่ล็อกอิน Claude Code ไว้)</option>
-          <option value="swu">SWU AI (มศว) API</option>
-          <option value="api">Anthropic API key</option>
-        </select>
-      </label>
-      <p class="muted small owner-only" id="providerNote"></p>
-      <div id="swuGroup" class="swu-group">
-        <label>SWU API key<input id="setSwuKey" type="password" autocomplete="off" placeholder="API key จากเว็บไซต์ SWU AI"></label>
-        <label class="check"><input type="checkbox" id="setSwuRemember"> จำ SWU key ไว้ในเบราว์เซอร์นี้</label>
-        <label>โมเดลของ SWU AI
-          <span class="brief-input">
-            <input id="setSwuModel" list="swuModelList" placeholder="anthropic/claude-sonnet-5">
-            <button type="button" id="loadSwuModels" class="btn small ghost"><i data-icon="RefreshCw"></i>ดึงรายชื่อ</button>
-          </span>
-          <datalist id="swuModelList"></datalist>
-        </label>
-        <p class="muted small" id="swuNote">เชื่อมผ่าน gateway ของ มศว ตามคู่มือ API Services (Bearer token) เลือกโมเดล Claude เช่น anthropic/claude-sonnet-5.5 จะได้ผลดีที่สุด</p>
-      </div>
-      <div class="grid2">
-        <label id="modelField">โมเดล<select id="setModel"></select></label>
-        <label id="effortField">ระดับการคิด (effort)<select id="setEffort"></select></label>
-        <label>จำนวนรอบแก้บั๊กสูงสุด<input id="setFix" type="number" min="1" max="10"></label>
-        <label>จำนวนรอบ code review<input id="setReview" type="number" min="0" max="3"></label>
-      </div>
-      <div id="keyGroup">
-        <label>Anthropic API key<input id="setKey" type="password" autocomplete="off" placeholder="sk-ant-... (เว้นว่างเพื่อใช้ key ของเซิร์ฟเวอร์)"></label>
-        <label class="check"><input type="checkbox" id="setRemember"> จำ API key ไว้ในเบราว์เซอร์นี้</label>
-        <p class="muted small" id="keyNote"></p>
-      </div>
-      <div class="guest-only own-key">
-        <h3 class="section-title">API key ของคุณเอง (ไม่บังคับ)</h3>
-        <p class="muted small">ทีมใช้โทเค็นของเจ้าของเครื่องก่อน เมื่อหมดหรือโควตาที่ได้รับหมด จะสลับมาใช้ key ของคุณแล้วทำงานต่อทันที ในโปรเจกต์เดิม key ของคุณเก็บในเบราว์เซอร์นี้ และส่งไปที่เซิร์ฟเวอร์เฉพาะตอนสั่งงาน ไม่ถูกบันทึกหรือแชร์ให้ใคร</p>
-        <label>ชนิดของ key
-          <select id="setOwnKind">
-            <option value="">ไม่ใช้ key ของฉัน</option>
-            <option value="swu">SWU AI (มศว) API key</option>
-            <option value="api">Anthropic API key</option>
-          </select>
-        </label>
-        <div id="ownKeyFields">
-          <label>Key<input id="setOwnKey" type="password" autocomplete="off" placeholder="วาง API key ของคุณ"></label>
-          <label class="check"><input type="checkbox" id="setOwnRemember" checked> จำ key ไว้ในเบราว์เซอร์นี้</label>
-          <label class="check"><input type="checkbox" id="setOwnFirst"> ใช้ key ของฉันตั้งแต่แรก (ไม่ใช้โทเค็นของเจ้าของ)</label>
-        </div>
-      </div>
-      <label class="owner-only">โทเค็นที่ใช้ไปแล้ว<span class="usage-row"><span id="usedText" class="muted small"></span><button type="button" id="resetUsage" class="btn small ghost"><i data-icon="RotateCcw"></i>รีเซ็ต</button></span></label>
-      <div class="muted small owner-only" id="roundsText"></div>
-      <p class="muted small owner-only">นับจากจำนวนจริงที่ AI ส่งกลับมาทุกครั้ง ถ้าต้นทางแจ้งว่าโทเค็นหมดจะขึ้นว่า "โทเค็นหมด" และเมื่อต้นทางรีเซ็ตโควตาแล้ว ตัวนับจะเริ่มใหม่จาก 0 ให้เอง พร้อมจำไว้ว่ารอบที่แล้วใช้ได้กี่ token</p>
-      <footer class="dialog-foot">
-        <button value="cancel" class="btn ghost">ยกเลิก</button>
-        <button value="save" id="saveSettings" class="btn primary">บันทึก</button>
-      </footer>
-    </form>
-  </dialog>
-
-  <script src="icons.js?v=21"></script>
-  <script src="office.js?v=21"></script>
-  <script src="app.js?v=21"></script>
+  <script src="icons.js?v=30"></script>
+  <script src="office.js?v=30"></script>
+  <script src="app.js?v=30"></script>
 </body>
 </html>

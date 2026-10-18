@@ -3,25 +3,50 @@
 (() => {
   const W = 1000, H = 600, CORRIDOR_Y = 395, SPEED = 250; // world units per second
 
-  const TEAM = {
-    pm:        { name: "Nina",   short: "PM",        th: "ผู้จัดการผลิตภัณฑ์",   icon: "ClipboardList", color: "#c8694f", skin: "#f3cfb0", hair: "#5b3a29", look: "bob" },
-    architect: { name: "Archie", short: "Tech Lead", th: "สถาปนิกระบบ",          icon: "LayoutTemplate", color: "#3c8278", skin: "#dca983", hair: "#2b2b2b", look: "hardhat" },
-    frontend:  { name: "Mia",    short: "Frontend",  th: "นักพัฒนาหน้าเว็บ",      icon: "MonitorSmartphone", color: "#b5607f", skin: "#f1c27d", hair: "#2e2018", look: "headphones" },
-    backend:   { name: "Ben",    short: "Backend",   th: "นักพัฒนาระบบหลังบ้าน",  icon: "Server", color: "#4a6d99", skin: "#b97a4a", hair: "#1d1d1d", look: "cap" },
-    qa:        { name: "Tessa",  short: "QA",        th: "ผู้ทดสอบระบบ",          icon: "FlaskConical", color: "#7d65ad", skin: "#f5d6c0", hair: "#3b2a4d", look: "goggles" },
-    debugger:  { name: "Max",    short: "Debugger",  th: "นักแก้บั๊ก",            icon: "Bug", color: "#5f8a4f", skin: "#ffdbac", hair: "#7a4a1f", look: "beanie" },
-    reviewer:  { name: "Rex",    short: "Reviewer",  th: "ผู้ตรวจโค้ด",           icon: "ScanSearch", color: "#c58d47", skin: "#8d5524", hair: "#9a9a9a", look: "glasses" },
-  };
-  const ORDER = Object.keys(TEAM);
+  // The team comes from the .md roles (see configure). These are only the defaults.
+  const SKINS = ["#f3cfb0", "#dca983", "#f1c27d", "#b97a4a", "#f5d6c0", "#ffdbac", "#8d5524", "#e0ac69"];
+  const HAIRS = ["#5b3a29", "#2b2b2b", "#2e2018", "#1d1d1d", "#3b2a4d", "#7a4a1f", "#9a9a9a", "#4a2c1a"];
+  let TEAM = {};
+  let ORDER = [];
+  let DESKS = {};
+  let SEATS = {};
+  let DESK_W = 120;
 
-  const DESKS = {
-    pm: { x: 80, y: 300 }, architect: { x: 215, y: 300 }, frontend: { x: 350, y: 300 }, backend: { x: 485, y: 300 },
-    qa: { x: 80, y: 490 }, debugger: { x: 215, y: 490 }, reviewer: { x: 350, y: 490 },
-  };
-  const SEATS = {
-    pm: { x: 705, y: 210, back: true }, architect: { x: 765, y: 206, back: true }, frontend: { x: 825, y: 206, back: true }, backend: { x: 885, y: 210, back: true },
-    qa: { x: 735, y: 298 }, debugger: { x: 800, y: 302 }, reviewer: { x: 865, y: 298 },
-  };
+  /** Build the team and lay out one desk and one meeting seat per role. */
+  function configure(list) {
+    TEAM = {};
+    list.forEach((a, i) => {
+      TEAM[a.id] = {
+        name: a.name, short: a.role_title || a.id, th: a.description || "", color: a.color || "#6b7a8f",
+        skin: a.skin || SKINS[i % SKINS.length], hair: a.hair || HAIRS[i % HAIRS.length], look: a.avatar || "bob",
+        outfit: a.id,
+      };
+    });
+    ORDER = list.map((a) => a.id);
+    const n = ORDER.length;
+    const perRow = Math.max(4, Math.ceil(n / 2));
+    const step = perRow > 1 ? 405 / (perRow - 1) : 0;
+    DESK_W = Math.min(120, step - 10);
+    DESKS = {};
+    ORDER.forEach((id, i) => {
+      const row = i < perRow ? 0 : 1;
+      const col = row ? i - perRow : i;
+      DESKS[id] = { x: Math.round(80 + col * step), y: row ? 490 : 300 };
+    });
+    SEATS = {};
+    const top = Math.ceil(n / 2);
+    ORDER.forEach((id, i) => {
+      const back = i < top;
+      const k = back ? i : i - top, m = back ? top : n - top;
+      const x0 = back ? 700 : 718, x1 = back ? 890 : 872;
+      SEATS[id] = { x: Math.round(m > 1 ? x0 + (k * (x1 - x0)) / (m - 1) : (x0 + x1) / 2), y: back ? 208 : 300, back };
+    });
+  }
+  configure([
+    { id: "orchestrator", name: "Claude", role_title: "Orchestrator", color: "#d97757", avatar: "glasses" },
+    { id: "helper", name: "Helper", role_title: "Built-in", color: "#6b7a8f", avatar: "cap" },
+  ]);
+
   const SPOTS = {
     board: { x: 148, y: 214 },
     coffee: { x: 560, y: 572 },
@@ -74,6 +99,7 @@
   const faceExtras = (t) => (t.look === "glasses" ? `<g fill="none" stroke="#3a3a3a" stroke-width="1.4"><circle cx="24" cy="26" r="4.6"/><circle cx="36" cy="26" r="4.6"/><path d="M28.6 26 H31.4"/></g>` : "");
 
   function bodyExtras(id, t) {
+    id = t.outfit || id;
     if (id === "pm") return `<path d="M30 42 L27 47 L30 60 L33 47Z" fill="#2f3e46"/>`;
     if (id === "qa") return `<path d="M15 50 Q15 40 25 40 L30 52 L35 40 Q45 40 45 50 L45 62 Q45 68 39 68 L21 68 Q15 68 15 62Z" fill="#f4f4f2"/><circle cx="38" cy="54" r="2.3" fill="${t.color}"/>`;
     if (id === "reviewer") return `<rect x="34" y="46" width="7" height="9" rx="1.5" fill="#fff" opacity=".9"/><path d="M35.5 49 h4 M35.5 51.5 h4" stroke="#999" stroke-width=".8"/>`;
@@ -147,8 +173,8 @@
     return `<svg viewBox="0 0 46 72" preserveAspectRatio="none"><path d="M23 44 Q8 30 6 10 Q20 22 23 44Z" fill="#6aa57f"/><path d="M23 44 Q38 28 41 6 Q27 20 23 44Z" fill="#4f8a66"/><path d="M23 44 Q22 22 24 2 Q30 24 23 44Z" fill="#87bd98"/><path d="M9 44 H37 L33 70 H13Z" fill="#c8694f"/><rect x="7" y="42" width="32" height="6" rx="2" fill="#d98b6a"/></svg>`;
   }
 
-  const FURNITURE = [
-    ...ORDER.map((id) => ({ cls: `desk desk-${id}`, x: DESKS[id].x, bottom: DESKS[id].y + 20, w: 120, h: 72, svg: deskSVG(id), id })),
+  const FURNITURE = () => [
+    ...ORDER.map((id) => ({ cls: `desk desk-${id}`, x: DESKS[id].x, bottom: DESKS[id].y + 20, w: DESK_W, h: 72, svg: deskSVG(id), id })),
     { cls: "meeting-table", x: 795, bottom: 256, w: 250, h: 66, svg: `<svg viewBox="0 0 250 66" preserveAspectRatio="none"><ellipse cx="125" cy="28" rx="122" ry="26" fill="#8a6a55"/><ellipse cx="125" cy="24" rx="122" ry="24" fill="#b88a64"/><rect x="45" y="45" width="10" height="20" fill="#6d4c41"/><rect x="195" y="45" width="10" height="20" fill="#6d4c41"/><rect x="95" y="14" width="22" height="14" rx="2" fill="#fff" opacity=".85"/><circle cx="160" cy="20" r="6" fill="#fff"/><circle cx="160" cy="20" r="4" fill="#6f4e37"/></svg>` },
     { cls: "test-screen", x: 770, bottom: 478, w: 170, h: 118, svg: `<svg viewBox="0 0 170 118" preserveAspectRatio="none"><rect x="2" y="2" width="166" height="92" rx="8" fill="#2b3440"/><rect x="8" y="8" width="154" height="80" rx="4" fill="#161b22"/><rect x="78" y="94" width="14" height="14" fill="#555"/><rect x="50" y="106" width="70" height="8" rx="4" fill="#444"/></svg><div class="screen-text" id="labScreen"></div>` },
     { cls: "rack", x: 925, bottom: 545, w: 70, h: 165, svg: `<svg viewBox="0 0 70 165" preserveAspectRatio="none"><rect x="2" y="2" width="66" height="161" rx="5" fill="#363b42"/>${[0, 1, 2, 3, 4, 5].map((i) => `<rect x="8" y="${10 + i * 25}" width="54" height="19" rx="2" fill="#4a5058"/><circle class="led" cx="16" cy="${19.5 + i * 25}" r="2.5" fill="#5cc49a"/><circle class="led led2" cx="24" cy="${19.5 + i * 25}" r="2.5" fill="#e8c37c"/><rect x="34" y="${17 + i * 25}" width="22" height="4" rx="1" fill="#6c737d"/>`).join("")}</svg>` },
@@ -211,10 +237,10 @@
       root.append(this.clock);
       const tick = () => { this.clock.textContent = new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }); };
       tick();
-      setInterval(tick, 10_000);
+      this.timers = [setInterval(tick, 10_000)];
 
       this.furniture = {};
-      for (const f of FURNITURE) {
+      for (const f of FURNITURE()) {
         const node = el("div", "furn " + f.cls, f.svg);
         node.style.width = (f.w / W * 100) + "%";
         node.style.height = (f.h / H * 100) + "%";
@@ -231,7 +257,13 @@
       this.last = performance.now();
       this.loop = this.loop.bind(this);
       requestAnimationFrame(this.loop);
-      setInterval(() => this.ambient(), 3500);
+      this.timers.push(setInterval(() => this.ambient(), 3500));
+    }
+
+    destroy() {
+      this.dead = true;
+      this.timers.forEach(clearInterval);
+      this.root.innerHTML = "";
     }
 
     spawn(id) {
@@ -254,6 +286,7 @@
     }
 
     loop(now) {
+      if (this.dead) return;
       // Time-based so walks finish on time even when the tab drops frames.
       const dt = Math.min(0.5, (now - this.last) / 1000);
       this.last = now;
@@ -312,7 +345,7 @@
       }));
     }
 
-    setStatus(id, state) {
+    setStatus(id, state, label = "") {
       const a = this.agents[id];
       if (!a) return;
       a.status = state;
@@ -321,10 +354,10 @@
       const badge = a.node.querySelector(".badge-status");
       badge.hidden = state === "idle";
       if (state === "thinking") badge.innerHTML = `<span class="dots"><i></i><i></i><i></i></span>`;
-      else if (state === "typing") badge.innerHTML = ic("Keyboard", 13);
+      else if (state === "typing") badge.innerHTML = ic("Keyboard", 13) + (label ? `<em>${esc(label)}</em>` : "");
       else if (state === "running") badge.innerHTML = `<span class="spin">${ic("Loader", 13)}</span>`;
       this.furniture[id]?.classList.toggle("on", state === "typing" || state === "thinking");
-      if (id === "pm" || id === "architect") this.board.classList.toggle("writing", state !== "idle" && a.at === "board");
+      if (id === "orchestrator" || id === "pm" || id === "architect") this.board.classList.toggle("writing", state !== "idle" && a.at === "board");
       if (id === "qa" && state === "running") this.lab("running");
     }
 
@@ -348,7 +381,7 @@
 
     react(ids, kind) {
       if (this.fast) return;
-      for (const id of ids) {
+      for (const id of ids || []) {
         const n = this.agents[id]?.node;
         if (!n) continue;
         n.classList.remove("jump", "shake", "nod");
@@ -420,5 +453,5 @@
     }
   }
 
-  window.AgentOffice = { Office, TEAM, ORDER, avatar };
+  window.AgentOffice = { Office, configure, avatar, get TEAM() { return TEAM; }, get ORDER() { return ORDER; } };
 })();
