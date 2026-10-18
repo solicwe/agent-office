@@ -25,7 +25,8 @@ export function toolSummary(tool, input = {}) {
     case "WebFetch": return `เปิดเว็บ ${short(input.url, 40)}`;
     case "WebSearch": return `ค้นเว็บ "${short(input.query, 30)}"`;
     case "TodoWrite": return "อัปเดตรายการงาน";
-    default: return `ใช้ ${tool}`;
+    // MCP tools are named mcp__<server>__<tool>; the tool part is what reads well on a badge.
+    default: return `ใช้ ${String(tool).startsWith("mcp__") ? String(tool).split("__").slice(2).join(" ") || tool : tool}`;
   }
 }
 
@@ -90,8 +91,10 @@ export class Flow {
 
       case "UserPromptSubmit": {
         s.round = { started: Date.now(), agents: [], tokens: {} };
-        log("user_prompt", { prompt: clip(p.prompt), prompt_sha256: sha(p.prompt) });
-        vis("ORCHESTRATOR_THINKING", { text: short(p.prompt, 120) });
+        // Claude Code also delivers background-task notices as prompts; they are not the user speaking.
+        const automatic = /^\s*<(task-notification|system-reminder)\b/.test(String(p.prompt || ""));
+        log("user_prompt", { prompt: clip(p.prompt), prompt_sha256: sha(p.prompt), automatic });
+        vis("ORCHESTRATOR_THINKING", { text: automatic ? "งานเบื้องหลังแจ้งผลกลับมา" : short(p.prompt, 120), automatic });
         return;
       }
 

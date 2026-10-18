@@ -91,6 +91,7 @@
   }
 
   async function play(e) {
+    if (e.session_id && !e.replay) setConn(e.session_id); // any live event means Claude Code is connected
     switch (e.type) {
       case "SESSION_START":
         setConn(e.session_id);
@@ -100,11 +101,11 @@
         setConn(e.session_id);
         allIdle();
         office.lab("idle");
-        feedItem("user", "MessageSquare", `<b>คำสั่งใหม่</b> ${esc(e.text)}`, e.t);
+        feedItem(e.automatic ? "info" : "user", e.automatic ? "BellRing" : "MessageSquare", e.automatic ? esc(e.text) : `<b>คำสั่งใหม่</b> ${esc(e.text)}`, e.t);
         office.moveTo("orchestrator", "board");
         await arrive(["orchestrator"]);
         status("orchestrator", "thinking", "คิดว่าจะใช้ใคร");
-        office.say("orchestrator", `ได้รับงาน: ${e.text}`);
+        office.say("orchestrator", e.automatic ? e.text : `ได้รับงาน: ${e.text}`);
         await pause(900);
         break;
 
@@ -258,7 +259,7 @@
     $("#timeline").innerHTML = d.rounds.length ? d.rounds.map((round, i) => `
       <section class="round">
         <h4>รอบที่ ${i + 1} <time>${esc(new Date(round.prompt.ts).toLocaleString("th-TH"))}</time></h4>
-        <div class="step user"><span class="dotc"></span><div><b>1. คำสั่งของผู้ใช้</b><p>${esc(round.prompt.prompt)}</p></div></div>
+        <div class="step user"><span class="dotc"></span><div><b>1. คำสั่งของผู้ใช้</b><p>${round.prompt.missed ? `<span class="muted">ไม่ได้บันทึกคำสั่ง: Agent Office ยังไม่เปิดตอนที่ส่งคำสั่งนี้ ขั้นตอนหลังจากนั้นบันทึกครบ</span>` : round.prompt.automatic ? `<span class="tag">อัตโนมัติ</span> <span class="muted">ข้อความจาก Claude Code (เช่นงานเบื้องหลังเสร็จ) ไม่ใช่คำสั่งของผู้ใช้</span>` : esc(round.prompt.prompt)}</p></div></div>
         <div class="step orch"><span class="dotc"></span><div><b>2. Orchestrator เลือก ${round.steps.length} งาน</b>
           <p>${round.steps.length ? round.steps.map((s) => `${window.AgentOffice.avatar(pool.some((a) => a.id === s.assigned.agent) ? s.assigned.agent : "helper", 18)} ${esc(s.assigned.agent)}`).join(" → ") : "ไม่ได้เรียก agent ย่อย Claude ทำเอง"}${round.steps.some((s) => s.assigned.execution === "parallel") ? ` <span class="tag">มีงานขนาน</span>` : ""}</p></div></div>
         ${round.steps.map((s, j) => `

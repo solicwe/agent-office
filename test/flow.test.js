@@ -80,7 +80,28 @@ test("the Markdown report tells the story in order", () => {
   for (const part of ["ตรวจ hash chain: **ผ่าน**", "1. คำสั่งของผู้ใช้", "2. Orchestrator ตัดสินใจ", "frontend", ".claude/agents/frontend.md", "4. คำตอบสุดท้าย", "แก้เรียบร้อย"]) assert.ok(md.includes(part), part);
 });
 
+test("work that starts while the window was closed still shows as a round, marked as such", () => {
+  const { audit } = run((dir) => makeRound(dir, "sess-4").filter((p) => p.hook_event_name !== "UserPromptSubmit"));
+  const r = rounds(audit.read("sess-4"));
+  assert.equal(r.length, 1);
+  assert.equal(r[0].prompt.missed, true);
+  assert.equal(r[0].steps[0].assigned.agent, "frontend");
+  assert.match(exportMarkdown("sess-4", audit.read("sess-4")), /ไม่ได้บันทึกคำสั่ง/);
+});
+
+test("background-task notices are logged as automatic, not as the user speaking", () => {
+  const { audit, events } = run((dir) => {
+    const r = makeRound(dir, "sess-5");
+    return [{ ...r[1], prompt: "<task-notification>\n<task-id>x</task-id>\n</task-notification>" }];
+  });
+  assert.equal(audit.read("sess-5")[0].automatic, true);
+  assert.equal(events[0].automatic, true);
+  const normal = run((dir) => [makeRound(dir, "sess-6")[1]]);
+  assert.equal(normal.audit.read("sess-6")[0].automatic, false);
+});
+
 test("badges describe tool calls in a few words", () => {
   assert.equal(toolSummary("Bash", { command: "npm test" }), "รัน npm test");
   assert.equal(toolSummary("Read", { file_path: "C:\\a\\b\\c.js" }), "อ่าน b/c.js");
+  assert.equal(toolSummary("mcp__Claude_Browser__javascript_tool", {}), "ใช้ javascript_tool");
 });
