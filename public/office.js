@@ -272,7 +272,7 @@
         <div class="bubble" hidden></div>
         <div class="badge-status" hidden></div>
         <div class="figure">${characterSVG(id)}</div>
-        <div class="nametag" style="--c:${t.color}">${t.name}<span>${t.short}</span></div>`);
+        <div class="nametag" style="--c:${t.color}" title="${esc(t.name)} · ${esc(t.short)}">${t.name}<span>${t.short}</span></div>`);
       node.dataset.id = id;
       this.root.append(node);
       const a = { id, node, pos: { ...resolve(id, "desk").point }, route: [], waiters: [], at: "desk", status: "idle", lastBusy: performance.now(), wander: false, bubbleTimer: 0 };

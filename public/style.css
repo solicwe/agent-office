@@ -497,7 +497,7 @@ code { font-family: "IBM Plex Mono", monospace; font-size: .92em; background: va
 .fi.user { background: var(--surface-2); border-color: var(--line); }
 .fi.user .fi-ic, .fi.done .fi-ic { background: var(--accent); color: var(--accent-ink); }
 .fi.done { border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
-.fi.work { padding-top: 3px; padding-bottom: 3px; font-size: 12.5px; }
+.fi.tool { padding-top: 3px; padding-bottom: 3px; font-size: 12.5px; }
 .fi.anchor .fi-ic { color: var(--ok); }
 .fi.warn .fi-ic { color: var(--warn); }
 
@@ -544,3 +544,22 @@ code { font-family: "IBM Plex Mono", monospace; font-size: .92em; background: va
 .imported-note span { color: var(--ink); }
 #importDialog textarea { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
 .audit-bar { flex-wrap: wrap; }
+
+/* ---------- UX polish ---------- */
+/* Feed rows keep their own height (they used to be squeezed and overlap, leaving gaps). */
+.feed > * { flex: 0 0 auto; }
+/* Roster: one-line status, never a tall card. */
+.member .st { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.member > div { overflow: hidden; }
+/* Name tags: just the name, so people standing together do not cover each other. */
+.nametag span { display: none; }
+/* Session picker in the top bar. */
+.meters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.watch { display: inline-flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 0 0 0 9px; color: var(--muted); }
+.watch select { border: 0; background: transparent; font-size: 12.5px; padding: 5px 8px 5px 2px; max-width: 280px; width: auto; }
+.watch select:focus { outline: none; }
+.chip.others { border-color: color-mix(in srgb, var(--warn) 55%, transparent); color: var(--warn); }
+.fi.switch { color: var(--muted); font-size: 12px; justify-content: center; }
+.fi.switch .fi-ic { background: transparent; }
+/* The whiteboard shows the current command. */
+.wb-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0; }

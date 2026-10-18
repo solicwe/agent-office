@@ -37,6 +37,7 @@ src/anchor.js           commit hash ลง branch audit-log (git plumbing ไม
 src/report.js           export .json / .md
 public/                 หน้าต่าง: ออฟฟิศ ตัวละคร แท็บ สด / Audit log / Roles
 scripts/verify.js       ตรวจ log เอง: npm run verify -- <file>
+scripts/attach.js       ใช้ทีมกับ repo อื่น: npm run attach -- <repo> / npm run detach -- <repo>
 scripts/export-team.js  สร้าง share/ (role สำหรับเพื่อนที่ไม่ได้เปิด Agent Office): npm run export-team
 src/importer.js         นำเข้า log จากแชททั่วไป (Gemini, ChatGPT) ที่ใช้ share/TEAM_PROMPT.md
 share/                  ไฟล์ role พร้อมใช้กับ Claude Code, แชททั่วไป, Codex/Cursor

@@ -8,7 +8,9 @@
     "start": "node server.js",
     "test": "node --test test/*.test.js",
     "verify": "node scripts/verify.js",
-    "export-team": "node scripts/export-team.js"
+    "export-team": "node scripts/export-team.js",
+    "attach": "node scripts/attach.js",
+    "detach": "node scripts/attach.js --detach"
   },
   "engines": {
     "node": ">=20"

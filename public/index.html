@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=30">
+  <link rel="stylesheet" href="style.css?v=32">
   <script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
 </head>
 <body>
@@ -22,7 +22,11 @@
       </div>
       <div class="meters">
         <span id="connChip" class="chip"><i data-icon="Unplug"></i><span>รอ Claude Code</span></span>
-        <span id="tokenChip" class="chip" hidden><i data-icon="Activity"></i><span></span></span>
+        <label class="watch" title="ถ้าเปิด Claude Code หลายหน้าต่าง เลือกได้ว่าจะดูอันไหน">
+          <i data-icon="Eye"></i>
+          <select id="watchSelect" aria-label="session ที่กำลังดู"><option value="auto">session ล่าสุด (อัตโนมัติ)</option></select>
+        </label>
+        <span id="othersChip" class="chip others" hidden></span>
       </div>
     </header>
 
@@ -95,8 +99,8 @@
     </form>
   </dialog>
 
-  <script src="icons.js?v=30"></script>
-  <script src="office.js?v=30"></script>
-  <script src="app.js?v=30"></script>
+  <script src="icons.js?v=32"></script>
+  <script src="office.js?v=32"></script>
+  <script src="app.js?v=32"></script>
 </body>
 </html>

@@ -5,7 +5,6 @@
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const time = (t) => new Date(t || Date.now()).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  const fmt = (n) => Number(n || 0).toLocaleString("th-TH");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   window.hydrateIcons();
 
@@ -71,13 +70,68 @@
   // ---------- event queue: one step at a time, never stalls ----------
   const queue = [];
   let running = false;
-  let currentSession = null;
   const arrive = (ids) => (office.fast || document.hidden ? null : Promise.race([office.arrived(ids), sleep(3500)]));
   const pause = (ms) => (office.fast || document.hidden ? null : sleep(ms));
 
   function push(e) {
     queue.push(e);
     if (!running) drain();
+  }
+
+  // ---------- which session the office shows ----------
+  // Several Claude Code windows can post to one office. The office follows one session:
+  // by default the one that most recently got a command; the picker pins another.
+  const known = new Map(); // session -> { folder, prompt, last, busy }
+  let watching = "auto";
+  let viewing = null;
+  function route(e) {
+    if (!e.session_id) return push(e);
+    const s = known.get(e.session_id) || { folder: "", prompt: "", last: 0, busy: false };
+    if (e.folder) s.folder = e.folder;
+    s.last = e.t || Date.now();
+    if (e.type === "ORCHESTRATOR_THINKING") { s.busy = true; if (!e.automatic) s.prompt = e.text; }
+    if (e.type === "TASK_COMPLETE") s.busy = false;
+    known.set(e.session_id, s);
+    let target = watching;
+    if (watching === "auto") target = !viewing || (e.type === "ORCHESTRATOR_THINKING" && !e.automatic) ? e.session_id : viewing;
+    if (target !== viewing && e.session_id === target) {
+      viewing = target;
+      push({ type: "SWITCH", session_id: target, folder: s.folder, replay: e.replay, t: e.t });
+    }
+    if (e.session_id === viewing) push(e);
+    renderWatch();
+  }
+  function renderWatch() {
+    const sel = $("#watchSelect");
+    const rows = [...known.entries()].sort((a, b) => b[1].last - a[1].last);
+    sel.innerHTML = `<option value="auto">session ล่าสุด (อัตโนมัติ)</option>` + rows.map(([id, s]) =>
+      `<option value="${esc(id)}">${esc(s.folder || "?")} · ${esc(id.slice(0, 8))}${s.prompt ? ` · ${esc(s.prompt.slice(0, 40))}` : ""}</option>`).join("");
+    sel.value = watching;
+    const others = rows.filter(([id, s]) => id !== viewing && s.busy).length;
+    $("#othersChip").hidden = !others;
+    $("#othersChip").textContent = `อีก ${others} session กำลังทำงาน`;
+    const v = known.get(viewing);
+    if (v) {
+      $("#connChip").classList.add("live");
+      $("#connChip").innerHTML = `${window.icon("PlugZap", 14)}<span>กำลังดู <b>${esc(v.folder || "?")}</b> · ${esc(viewing.slice(0, 8))}</span>`;
+    }
+  }
+  $("#watchSelect").addEventListener("change", (ev) => {
+    watching = ev.target.value;
+    if (watching !== "auto" && watching !== viewing) {
+      viewing = watching;
+      push({ type: "SWITCH", session_id: viewing, folder: known.get(viewing)?.folder || "" });
+    }
+    renderWatch();
+  });
+
+  // the board shows the current command, the kanban its steps
+  let steps = [];
+  const showSteps = () => office.kanbanSet(steps.map((x) => ({ label: x.label, state: x.state })));
+  function setBoard(text) {
+    const t = office.board.querySelector(".wb-title");
+    t.textContent = text ? (text.length > 60 ? text.slice(0, 59) + "…" : text) : "SPEC / DESIGN";
+    t.title = text || "";
   }
   async function drain() {
     running = true;
@@ -91,15 +145,20 @@
   }
 
   async function play(e) {
-    if (e.session_id && !e.replay) setConn(e.session_id); // any live event means Claude Code is connected
     switch (e.type) {
+      case "SWITCH":
+        allIdle();
+        office.lab("idle");
+        steps = []; showSteps(); setBoard(""); office.boardDone(false);
+        feedItem("switch", "Eye", `กำลังดู session <b>${esc(e.folder || "?")}</b> · <code>${esc(String(e.session_id).slice(0, 8))}</code>`, e.t);
+        break;
+
       case "SESSION_START":
-        setConn(e.session_id);
         break;
 
       case "ORCHESTRATOR_THINKING":
-        setConn(e.session_id);
         allIdle();
+        if (!e.automatic) { steps = []; showSteps(); setBoard(e.text); office.boardDone(false); }
         office.lab("idle");
         feedItem(e.automatic ? "info" : "user", e.automatic ? "BellRing" : "MessageSquare", e.automatic ? esc(e.text) : `<b>คำสั่งใหม่</b> ${esc(e.text)}`, e.t);
         office.moveTo("orchestrator", "board");
@@ -112,6 +171,9 @@
       case "AGENT_ASSIGNED": {
         const to = office.agents[e.to] ? e.to : "helper";
         feedItem("assign", "ArrowRightLeft", `${who("orchestrator")} มอบงานให้ ${who(to)}${e.agent !== to ? ` <span class="muted">(${esc(e.agent)})</span>` : ""}${e.parallel ? ` <span class="tag">ขนาน</span>` : ""}<div class="sub">${esc(e.subtask)}</div>`, e.t);
+        steps.push({ agent: to, label: `${nameOf(to)}: ${e.subtask || ""}`, state: "active" });
+        showSteps();
+        office.boardDone(true);
         status("orchestrator", "typing", "มอบหมายงาน");
         office.moveTo("orchestrator", `visit:${to}`);
         await arrive(["orchestrator"]);
@@ -135,7 +197,7 @@
           lastWork.node.querySelector(".fi-body").innerHTML = `${who(id)} ${esc(e.badge)} <span class="muted">· ${lastWork.n} ขั้น</span>`;
           lastWork.node.querySelector("time").textContent = time(e.t);
         } else {
-          const node = feedItem("work", "Wrench", `${who(id)} ${esc(e.badge)}`, e.t);
+          const node = feedItem("tool", "Wrench", `${who(id)} ${esc(e.badge)}`, e.t);
           lastWork = { id, node, n: 1 };
         }
         break;
@@ -145,6 +207,8 @@
         const from = office.agents[e.from] ? e.from : "helper";
         feedItem("handoff", "PackageCheck", `${who(from)} ส่งงานกลับให้ ${who("orchestrator")}${e.summary ? `<div class="sub">${esc(e.summary)}</div>` : ""}`, e.t);
         office.lab("idle");
+        const step = steps.find((x) => x.agent === from && x.state === "active");
+        if (step) { step.state = "done"; showSteps(); }
         status(from, "typing", "ส่งงาน");
         office.moveTo(from, "visit:orchestrator");
         await arrive([from]);
@@ -165,12 +229,12 @@
         allIdle();
         office.lab("idle");
         office.moveTo("orchestrator", "desk");
-        feedItem("done", "BadgeCheck", `<b>เสร็จ</b> ใช้ agent ${e.agents} งาน · ${fmt(e.tokens)} tokens${e.summary ? `<div class="sub">${esc(e.summary)}</div>` : ""}`, e.t);
+        steps.forEach((x) => { x.state = "done"; }); showSteps();
+        feedItem("done", "BadgeCheck", `<b>เสร็จ</b> ${e.agents ? `ใช้ ${e.agents} agent` : "Claude ทำเอง ไม่ได้เรียก agent"}${e.summary ? `<div class="sub">${esc(e.summary)}</div>` : ""}`, e.t);
         if (!e.replay) {
           office.say("orchestrator", e.summary || "เสร็จแล้ว");
           office.react(window.AgentOffice.ORDER, "jump");
           if (!office.fast) office.confetti();
-          addTokens(e.tokens);
           loadSessions(true);
         }
         break;
@@ -184,17 +248,6 @@
   }
 
   // ---------- connection ----------
-  function setConn(sessionId) {
-    currentSession = sessionId || currentSession;
-    $("#connChip").classList.add("live");
-    $("#connChip").innerHTML = `${window.icon("PlugZap", 14)}<span>เชื่อมกับ Claude Code${currentSession ? ` · ${esc(currentSession.slice(0, 8))}` : ""}</span>`;
-  }
-  let roundTokens = 0;
-  function addTokens(n) {
-    roundTokens += n || 0;
-    $("#tokenChip").hidden = false;
-    $("#tokenChip span").textContent = `session นี้ ${fmt(roundTokens)} tokens`;
-  }
 
   function connect() {
     const es = new EventSource("/events");
@@ -206,7 +259,7 @@
         fetch("/api/agents").then((r) => r.json()).then((d) => renderRoles(d.agents, d.errors, d.dir)).catch(() => {});
         // Catch up on what happened before this window opened, without the walking.
         feed.innerHTML = `<div class="empty">ยังไม่มีงาน<br>เปิด Claude Code ในโฟลเดอร์นี้ แล้วพิมพ์งานได้เลย ตัวละครจะขยับตามที่ Claude ทำจริง</div>`;
-        for (const r of e.recent) push({ ...r, replay: true });
+        for (const r of e.recent) route({ ...r, replay: true });
         return;
       }
       if (e.type === "AGENTS_CHANGED") {
@@ -215,7 +268,7 @@
         feedItem("info", "UserPlus", `อัปเดต roles จากไฟล์ .md แล้ว (${e.agents.filter((a) => !a.builtin).length} roles${e.errors.length ? `, มีปัญหา ${e.errors.length} ไฟล์ ดูแท็บ Roles` : ""})`, e.t);
         return;
       }
-      push(e);
+      route(e);
     };
     es.onerror = () => {
       $("#connChip").classList.remove("live");
@@ -237,7 +290,6 @@
     if (pick) loadSession(pick); else { $("#timeline").innerHTML = `<div class="empty">ยังไม่มี session<br>สั่งงานใน Claude Code แล้วกลับมาดูที่นี่</div>`; $("#auditActions").hidden = true; $("#verifyBox").hidden = true; }
   }
 
-  const tok = (t) => (t ? `${fmt(t.total ?? (t.input || 0) + (t.output || 0))} tokens${t.source === "estimate" ? " (ประมาณ)" : ""}` : "");
   const secs = (ms) => (ms != null ? `${(ms / 1000).toFixed(1)} วิ` : "");
   const pre = (label, text, open = false) => (text ? `<details${open ? " open" : ""}><summary>${esc(label)}</summary><pre>${esc(text)}</pre></details>` : "");
 
@@ -267,12 +319,12 @@
           <p>${round.steps.length ? round.steps.map((s) => `${window.AgentOffice.avatar(pool.some((a) => a.id === s.assigned.agent) ? s.assigned.agent : "helper", 18)} ${esc(s.assigned.agent)}`).join(" → ") : "ไม่ได้เรียก agent ย่อย Claude ทำเอง"}${round.steps.some((s) => s.assigned.execution === "parallel") ? ` <span class="tag">มีงานขนาน</span>` : ""}</p></div></div>
         ${round.steps.map((s, j) => `
           <div class="step agent"><span class="dotc" style="--c:${esc(pool.find((a) => a.id === s.assigned.agent)?.color || "#6b7a8f")}"></span><div>
-            <b>3.${j + 1} ${esc(s.assigned.agent)}</b> <span class="muted small">${esc([s.assigned.execution, secs(s.result?.duration_ms), tok(s.finished?.tokens)].filter(Boolean).join(" · "))}</span>
+            <b>3.${j + 1} ${esc(s.assigned.agent)}</b> <span class="muted small">${esc([s.assigned.execution, secs(s.result?.duration_ms)].filter(Boolean).join(" · "))}</span>
             <p>${esc(s.assigned.subtask)}</p>
             <small class="muted">${s.assigned.md_file ? `ไฟล์ ${esc(s.assigned.md_file)} · sha256 <code>${esc(s.assigned.md_sha256.slice(0, 12))}…</code>` : "subagent ในตัวของ Claude Code"}</small>
             ${pre("เหตุผลที่เลือก", s.assigned.reasoning)}${pre("Input", s.assigned.input)}${pre("Output", s.result?.output)}
           </div></div>`).join("")}
-        <div class="step final"><span class="dotc"></span><div><b>4. คำตอบสุดท้าย</b> <span class="muted small">${round.final ? esc([secs(round.final.duration_ms), tok(round.final.tokens_round_total), `${round.tools} tool calls`].join(" · ")) : "ยังไม่จบ"}</span>
+        <div class="step final"><span class="dotc"></span><div><b>4. คำตอบสุดท้าย</b> <span class="muted small">${round.final ? esc([secs(round.final.duration_ms), `${round.tools} tool calls`].join(" · ")) : "ยังไม่จบ"}</span>
           ${pre("ข้อความ", round.final?.text, true)}
           ${round.anchors.map((a) => `<small class="anchor ${a.pushed ? "ok" : ""}">${window.icon("Link", 12)} ${a.ok ? `commit <code>${esc(String(a.commit).slice(0, 10))}</code> · ${a.pushed ? "ขึ้น GitHub แล้ว" : "ยังไม่ขึ้น GitHub"}` : `ยึด hash ไม่สำเร็จ: ${esc(a.error)}`}</small>`).join("")}
         </div></div>
