@@ -36,6 +36,8 @@ export function usageSince(file, seen = new Set()) {
     total.messages++;
     if (model && !total.models.includes(model)) total.models.push(model);
   }
+  // Everything the model processed, cached context included (what Claude Code itself reports).
+  total.total = total.input + total.output + total.cache_read + total.cache_write;
   return total;
 }
 

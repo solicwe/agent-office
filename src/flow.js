@@ -41,10 +41,15 @@ function responseText(r) {
   return JSON.stringify(r);
 }
 
-const addTokens = (a, b) => ({
-  input: (a.input || 0) + (b.input || 0), output: (a.output || 0) + (b.output || 0),
-  cache_read: (a.cache_read || 0) + (b.cache_read || 0), cache_write: (a.cache_write || 0) + (b.cache_write || 0),
-});
+const addTokens = (a, b) => {
+  const t = {
+    input: (a.input || 0) + (b.input || 0), output: (a.output || 0) + (b.output || 0),
+    cache_read: (a.cache_read || 0) + (b.cache_read || 0), cache_write: (a.cache_write || 0) + (b.cache_write || 0),
+  };
+  t.total = t.input + t.output + t.cache_read + t.cache_write;
+  return t;
+};
+const estimated = (text) => { const n = estimateTokens(text); return { output: n, total: n, source: "estimate" }; };
 
 export class Flow {
   /**
@@ -145,7 +150,7 @@ export class Flow {
 
       case "SubagentStop": {
         const used = usageSince(p.agent_transcript_path, s.seen);
-        const tokens = used.messages ? { ...used, source: "transcript" } : { output: estimateTokens(p.last_assistant_message), source: "estimate" };
+        const tokens = used.messages ? { ...used, source: "transcript" } : estimated(p.last_assistant_message);
         if (s.round) s.round.tokens = addTokens(s.round.tokens, tokens);
         log("agent_finished", { agent: p.agent_type || null, agent_id: p.agent_id || null, tokens, last_message: clip(p.last_assistant_message, 4000) });
         vis("AGENT_DONE", { agent: this.officeId(p.agent_type) });
@@ -154,7 +159,7 @@ export class Flow {
 
       case "Stop": {
         const used = usageSince(p.transcript_path, s.seen);
-        const main = used.messages ? { ...used, source: "transcript" } : { output: estimateTokens(p.last_assistant_message), source: "estimate" };
+        const main = used.messages ? { ...used, source: "transcript" } : estimated(p.last_assistant_message);
         const round = s.round || { started: Date.now(), agents: [], tokens: {} };
         const total = addTokens(round.tokens, main);
         log("final_response", {
@@ -168,7 +173,7 @@ export class Flow {
         });
         s.round = null;
         s.pending.clear();
-        vis("TASK_COMPLETE", { summary: short(p.last_assistant_message, 160), agents: round.agents.length, tokens: total.input + total.output });
+        vis("TASK_COMPLETE", { summary: short(p.last_assistant_message, 160), agents: round.agents.length, tokens: total.total });
         this.onRoundEnd(sid);
         return;
       }

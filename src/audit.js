@@ -16,7 +16,8 @@ export function canonical(v) {
   if (v && typeof v === "object") return `{${Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(",")}}`;
   return JSON.stringify(v ?? null);
 }
-export const hashEntry = (entry) => createHash("sha256").update(canonical({ ...entry, hash: undefined })).digest("hex");
+// Normalised through JSON first, so what is hashed is exactly what is written to the file.
+export const hashEntry = (entry) => createHash("sha256").update(canonical(JSON.parse(JSON.stringify({ ...entry, hash: undefined })))).digest("hex");
 
 export class AuditLog {
   constructor(dir) {
@@ -42,7 +43,8 @@ export class AuditLog {
   /** Add one entry to the session's chain and return it (with seq, ts, prev, hash). */
   append(sessionId, type, data = {}) {
     const h = this.head(sessionId);
-    const entry = { session_id: sessionId, seq: h.seq + 1, ts: new Date().toISOString(), type, ...data, prev: h.hash };
+    // The chain fields come last so data can never overwrite them.
+    const entry = { ...data, session_id: sessionId, seq: h.seq + 1, ts: new Date().toISOString(), type, prev: h.hash };
     entry.hash = hashEntry(entry);
     appendFileSync(this.file(sessionId), JSON.stringify(entry) + "\n");
     this.heads.set(sessionId, { seq: entry.seq, hash: entry.hash });
@@ -58,7 +60,7 @@ export class AuditLog {
   }
 
   sessions() {
-    return readdirSync(this.dir).filter((n) => n.endsWith(".jsonl")).map((n) => {
+    return readdirSync(this.dir).filter((n) => n.endsWith(".jsonl") && SAFE_ID.test(n.slice(0, -6))).map((n) => {
       const id = n.slice(0, -6);
       const e = this.read(id);
       return {
@@ -78,8 +80,11 @@ export class AuditLog {
 /** Recompute the chain. ok, or the first entry that does not match. */
 export function verify(entries) {
   let prev = GENESIS;
+  if (!entries.length) return { ok: false, at: 0, reason: "log ว่าง ไม่มีอะไรให้ตรวจ" };
+  const sid = entries[0].session_id;
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
+    if (e.session_id !== sid) return { ok: false, at: i, reason: `entry ${i} เป็นของ session อื่น (${e.session_id})` };
     if (e.seq !== i) return { ok: false, at: i, reason: `ลำดับ seq ผิดที่ ${i} (เจอ ${e.seq}) มีบรรทัดหายหรือสลับ` };
     if (e.prev !== prev) return { ok: false, at: i, reason: `prev ของ entry ${i} ไม่ตรงกับ hash ของ entry ก่อนหน้า` };
     if (hashEntry(e) !== e.hash) return { ok: false, at: i, reason: `เนื้อหาของ entry ${i} ถูกแก้ (hash ไม่ตรง)` };

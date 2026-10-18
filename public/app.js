@@ -236,7 +236,7 @@
     if (pick) loadSession(pick); else { $("#timeline").innerHTML = `<div class="empty">ยังไม่มี session<br>สั่งงานใน Claude Code แล้วกลับมาดูที่นี่</div>`; $("#auditActions").hidden = true; $("#verifyBox").hidden = true; }
   }
 
-  const tok = (t) => (t ? `${fmt((t.input || 0) + (t.output || 0))} tokens${t.source === "estimate" ? " (ประมาณ)" : ""}` : "");
+  const tok = (t) => (t ? `${fmt(t.total ?? (t.input || 0) + (t.output || 0))} tokens${t.source === "estimate" ? " (ประมาณ)" : ""}` : "");
   const secs = (ms) => (ms != null ? `${(ms / 1000).toFixed(1)} วิ` : "");
   const pre = (label, text, open = false) => (text ? `<details${open ? " open" : ""}><summary>${esc(label)}</summary><pre>${esc(text)}</pre></details>` : "");
 

@@ -44,12 +44,13 @@ test("the audit log holds what the professor needs, and the chain verifies", () 
   assert.equal(a.execution, "sequential");
   assert.equal(byType("agent_result").output, "แก้ onclick ใน cart.html แล้ว");
   assert.ok(byType("agent_result").duration_ms >= 0);
-  assert.deepEqual(byType("agent_finished").tokens, { input: 700, output: 300, cache_read: 0, cache_write: 0, messages: 1, models: [], source: "transcript" });
+  assert.deepEqual(byType("agent_finished").tokens, { input: 700, output: 300, cache_read: 0, cache_write: 0, messages: 1, models: [], total: 1000, source: "transcript" });
   const f = byType("final_response");
   assert.equal(f.text, "แก้เรียบร้อย ปุ่มสั่งซื้อกดได้แล้ว");
   assert.equal(f.agent_count, 1);
   assert.deepEqual(f.tokens_orchestrator.input, 2700, "each message counted once, from the real transcript");
   assert.equal(f.tokens_round_total.input + f.tokens_round_total.output, 2700 + 120 + 1000);
+  assert.equal(f.tokens_round_total.total, 2700 + 120 + 900 + 1000, "cached context is counted too, like Claude Code reports");
 });
 
 test("two agents launched together are logged as parallel", () => {

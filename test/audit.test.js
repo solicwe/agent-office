@@ -43,6 +43,15 @@ test("any edit, removal or reordering is detected", () => {
   assert.equal(verify(log.read("s1")).ok, false, "swapped lines");
 });
 
+test("an empty log, a line from another session, or data posing as chain fields never pass", () => {
+  assert.equal(verify([]).ok, false);
+  const log = fresh();
+  const e = log.append("s1", "x", { seq: 99, session_id: "other", prev: "fake", type: "forged" });
+  assert.deepEqual([e.seq, e.session_id, e.type, e.prev], [0, "s1", "x", GENESIS], "chain fields win over data");
+  const other = new AuditLog(log.dir).append("s2", "y");
+  assert.match(verify([e, { ...other, seq: 1, prev: e.hash }]).reason, /session อื่น/);
+});
+
 test("session ids cannot be used to write outside the log folder", () => {
   assert.throws(() => fresh().append("../evil", "x"), /bad session id/);
 });

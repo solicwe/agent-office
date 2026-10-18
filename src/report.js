@@ -30,7 +30,7 @@ export function exportJson(sessionId, entries) {
 }
 
 const fence = (t) => "```\n" + String(t ?? "").replace(/```/g, "ˋˋˋ") + "\n```";
-const tok = (t) => (t ? `${(t.input || 0) + (t.output || 0)} (input ${t.input || 0}, output ${t.output || 0}${t.cache_read ? `, cache read ${t.cache_read}` : ""}; ${t.source === "estimate" ? "ประมาณ" : "จริงจาก transcript"})` : "-");
+const tok = (t) => (t ? `${t.total ?? (t.input || 0) + (t.output || 0)} (input ${t.input || 0}, output ${t.output || 0}, cache read ${t.cache_read || 0}, cache write ${t.cache_write || 0}; ${t.source === "estimate" ? "ประมาณ" : "จริงจาก transcript"})` : "-");
 
 export function exportMarkdown(sessionId, entries) {
   const v = verify(entries);
