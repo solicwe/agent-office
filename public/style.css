@@ -540,3 +540,7 @@ code { font-family: "IBM Plex Mono", monospace; font-size: .92em; background: va
 .role-error { display: flex; gap: 8px; color: var(--bad); border: 1px solid var(--bad); border-radius: 10px; padding: 8px 10px; font-size: 12.5px; }
 .role-error div { display: flex; flex-direction: column; }
 @media (max-width: 860px) { .roster { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; } }
+.imported-note { display: flex; gap: 8px; align-items: flex-start; margin: 10px 12px 0; padding: 8px 10px; border-radius: 10px; font-size: 12.5px; border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent); color: var(--warn); }
+.imported-note span { color: var(--ink); }
+#importDialog textarea { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+.audit-bar { flex-wrap: wrap; }

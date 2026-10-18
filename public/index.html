@@ -49,7 +49,9 @@
           <div class="audit-bar">
             <select id="sessionSelect" aria-label="เลือก session"></select>
             <button id="refreshAudit" class="btn small ghost icon-only" title="โหลดใหม่" aria-label="โหลดใหม่"><i data-icon="RotateCw"></i></button>
+            <button id="importBtn" class="btn small ghost" title="นำเข้า log จากแชท Gemini / ChatGPT / claude.ai ของเพื่อน"><i data-icon="Import"></i>นำเข้า log จากแชท</button>
           </div>
+          <div id="importedNote" class="imported-note" hidden></div>
           <div id="verifyBox" class="verify" hidden></div>
           <div class="audit-actions" id="auditActions" hidden>
             <a id="exportJson" class="btn small"><i data-icon="FileJson"></i>Export .json</a>
@@ -69,6 +71,29 @@
       </aside>
     </main>
   </div>
+
+  <dialog id="importDialog" class="dialog">
+    <form method="dialog" id="importForm" novalidate>
+      <header class="dialog-head">
+        <h2><i data-icon="Import"></i>นำเข้า log จากแชท</h2>
+        <button value="cancel" class="btn icon-only ghost" aria-label="ปิด"><i data-icon="X"></i></button>
+      </header>
+      <p class="muted small">สำหรับเพื่อนที่ใช้ <code>share/TEAM_PROMPT.md</code> ในแชททั่วไป ทุกคำตอบจะมีบล็อก <code>team-log</code> ท้ายข้อความ วางทั้งบทสนทนาหรือเลือกไฟล์ได้เลย ระบบหาบล็อกเอง</p>
+      <div class="grid2">
+        <label>ชื่อเพื่อน<input id="importFriend" maxlength="60" placeholder="เช่น ต้น"></label>
+        <label>มาจาก
+          <select id="importSource"><option>Gemini</option><option>ChatGPT</option><option>claude.ai</option><option>Codex</option><option>อื่นๆ</option></select>
+        </label>
+      </div>
+      <label>ข้อความบทสนทนา<textarea id="importText" rows="9" placeholder="วางบทสนทนาทั้งหมดที่นี่"></textarea></label>
+      <label class="file-btn"><i data-icon="FileUp"></i><span>หรือเลือกไฟล์ .txt / .md</span><input type="file" id="importFile" accept=".txt,.md,.json,text/plain" hidden></label>
+      <p class="muted small" id="importMsg"></p>
+      <footer class="dialog-foot">
+        <button value="cancel" class="btn ghost">ยกเลิก</button>
+        <button type="button" id="importGo" class="btn primary"><i data-icon="Import"></i>นำเข้า</button>
+      </footer>
+    </form>
+  </dialog>
 
   <script src="icons.js?v=30"></script>
   <script src="office.js?v=30"></script>

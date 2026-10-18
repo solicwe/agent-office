@@ -59,6 +59,21 @@ Agent Office คือหน้าต่างที่เปิดข้าง 
 3. ดูในหน้าต่างว่า Claude เดินไปหาตัวละครของ role นั้น และในแท็บ Audit log ว่าเลือกถูกไฟล์ `.md`
 4. รัน `npm test` ก่อน commit ถ้าแก้โค้ดของ Agent Office เอง
 
+## เพื่อนที่ไม่ได้เปิด Agent Office
+
+โฟลเดอร์ [`share/`](share/README.md) มีไฟล์พร้อมใช้ ดาวน์โหลดจาก GitHub ได้เลย:
+
+| ไฟล์ | ใช้กับ |
+|---|---|
+| `share/claude-code/*.md` | Claude Code: คัดลอกไปเป็น `.claude/agents/` ในโปรเจกต์ของตัวเอง ได้ agent จริงทุกตัว |
+| `share/TEAM_PROMPT.md` | Gemini, ChatGPT, claude.ai: วางเป็นคำสั่งเริ่มต้น AI จะทำงานเป็นทั้งทีม และจบทุกคำตอบด้วยบล็อก `team-log` |
+| `share/AGENTS.md` | Codex, Cursor และเครื่องมือที่อ่าน `AGENTS.md` |
+| `share/roles/*.md` | ใช้ทีละ role ในแชทไหนก็ได้ |
+
+**เก็บ log จากเพื่อนที่ใช้แชท:** ให้เพื่อนคัดลอกทั้งบทสนทนา (หรือบันทึกเป็นไฟล์ .txt) ส่งมา แล้วกด **นำเข้า log จากแชท** ในแท็บ Audit log log นั้นจะขึ้นป้าย "นำเข้าจากแชท (AI รายงานเอง)" และถูกยึด hash ขึ้น GitHub ทันที ควรบอกอาจารย์ตรงๆ ว่า log แบบนี้ AI ในแชทเขียนรายงานเอง ส่วน log จาก Claude Code จับจากการทำงานจริง
+
+แก้ role ใน `.claude/agents/` แล้วต้องรัน `npm run export-team` เพื่ออัปเดต `share/` (`npm test` จะเตือนถ้าลืม)
+
 ## Audit log สำหรับส่งอาจารย์
 
 ทุกคำสั่งถูกบันทึกในแท็บ **Audit log** และในไฟล์ `logs/<session>.jsonl`

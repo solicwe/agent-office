@@ -230,7 +230,7 @@
     const sel = $("#sessionSelect");
     const was = keep ? sel.value : null;
     sel.innerHTML = sessions.length
-      ? sessions.map((s) => `<option value="${esc(s.session_id)}">${esc(new Date(s.updated).toLocaleString("th-TH"))} · ${esc(s.first_prompt || s.session_id.slice(0, 8))} (${s.prompts} รอบ)</option>`).join("")
+      ? sessions.map((s) => `<option value="${esc(s.session_id)}">${s.imported ? `[แชท ${esc(s.source)}${s.friend ? ` · ${esc(s.friend)}` : ""}] ` : ""}${esc(new Date(s.updated).toLocaleString("th-TH"))} · ${esc(s.first_prompt || s.session_id.slice(0, 8))} (${s.prompts} รอบ)</option>`).join("")
       : `<option value="">ยังไม่มี session</option>`;
     const pick = (was && sessions.some((s) => s.session_id === was) ? was : sessions[0]?.session_id) || "";
     sel.value = pick;
@@ -253,6 +253,9 @@
     $("#verifyBox").innerHTML = v.ok
       ? `${window.icon("ShieldCheck", 16)}<div><b>hash chain ถูกต้อง</b><span>${v.count} entries · head <code>${esc(v.head.slice(0, 16))}…</code></span></div>`
       : `${window.icon("ShieldAlert", 16)}<div><b>log ถูกแก้ไข</b><span>${esc(v.reason)}</span></div>`;
+    const first = d.entries[0] || {};
+    $("#importedNote").hidden = !first.imported;
+    if (first.imported) $("#importedNote").innerHTML = `${window.icon("Info", 14)}<span><b>นำเข้าจากแชท ${esc(first.source)}${first.friend ? ` ของ ${esc(first.friend)}` : ""}</b> · AI ในแชทรายงานเอง ไม่ได้จับจากการทำงานจริงของ Claude Code hash chain พิสูจน์ได้แค่ว่าไม่ถูกแก้หลังนำเข้า</span>`;
     $("#auditActions").hidden = false;
     $("#exportJson").href = `/api/sessions/${encodeURIComponent(id)}/export.json`;
     $("#exportMd").href = `/api/sessions/${encodeURIComponent(id)}/export.md`;
@@ -276,6 +279,38 @@
       </section>`).join("") : `<div class="empty">session นี้ยังไม่มีคำสั่ง</div>`;
   }
   $("#sessionSelect").addEventListener("change", (e) => loadSession(e.target.value));
+
+  // ---------- import a friend's chat (Gemini, ChatGPT, ...) ----------
+  $("#importBtn").addEventListener("click", () => { $("#importMsg").textContent = ""; $("#importDialog").showModal(); });
+  $("#importFile").addEventListener("change", async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    $("#importText").value = await f.text();
+    $("#importMsg").textContent = `อ่านไฟล์ ${f.name} แล้ว`;
+  });
+  $("#importGo").addEventListener("click", async () => {
+    const btn = $("#importGo");
+    btn.disabled = true;
+    $("#importMsg").textContent = "กำลังนำเข้า…";
+    try {
+      const r = await fetch("/api/import", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: $("#importText").value, source: $("#importSource").value, friend: $("#importFriend").value.trim() }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      $("#importDialog").close();
+      $("#importText").value = "";
+      await loadSessions();
+      $("#sessionSelect").value = d.session_id;
+      loadSession(d.session_id);
+      feedItem("info", "Import", `นำเข้า log จากแชท ${esc($("#importSource").value)} แล้ว ${d.rounds} รอบ${d.anchored?.pushed ? " และยึด hash ขึ้น GitHub แล้ว" : ""}`);
+    } catch (err) {
+      $("#importMsg").textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
   $("#refreshAudit").addEventListener("click", () => loadSessions(true));
 
   // ---------- tabs ----------

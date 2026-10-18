@@ -15,7 +15,7 @@ export function rounds(entries) {
     }
     // Steps whose command arrived while the window was closed still belong to a round.
     if (!cur) {
-      if (["session_start", "session_end", "anchored"].includes(e.type)) continue;
+      if (["session_start", "session_end", "anchored", "import_raw"].includes(e.type)) continue;
       cur = { prompt: { ts: e.ts, prompt: null, missed: true }, steps: [], tools: 0, final: null, anchors: [] };
       out.push(cur);
     }
@@ -53,6 +53,7 @@ export function exportMarkdown(sessionId, entries) {
     `- ส่งออกเมื่อ: ${new Date().toISOString()}`,
     `- เริ่ม session: ${entries[0]?.ts || "-"}${start?.model ? ` · model ${start.model}` : ""}`,
     `- จำนวน entry: ${entries.length}`,
+    ...(start?.imported ? [`- **ที่มา: นำเข้าจากแชท ${start.source}${start.friend ? ` ของ ${start.friend}` : ""}** ข้อมูลในรอบเหล่านี้ AI ในแชทรายงานเอง (ไม่ได้จับจาก hook ของ Claude Code) hash chain พิสูจน์ได้ว่าไม่ถูกแก้หลังนำเข้า และต้นฉบับข้อความทั้งหมดมี sha256 \`${start.raw_sha256}\``] : []),
     `- ตรวจ hash chain: ${v.ok ? `**ผ่าน** (head \`${v.head}\`)` : `**ไม่ผ่าน** ที่ entry ${v.at}: ${v.reason}`}`,
     "",
   ];

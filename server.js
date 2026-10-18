@@ -10,6 +10,7 @@ import { AuditLog, verify } from "./src/audit.js";
 import { Flow } from "./src/flow.js";
 import { Anchor } from "./src/anchor.js";
 import { exportJson, exportMarkdown, rounds } from "./src/report.js";
+import { importChat } from "./src/importer.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -45,15 +46,19 @@ const flow = new Flow({
   audit,
   pool: () => pool,
   emit: broadcast,
-  onRoundEnd: (sid) => {
-    if (!anchor) return;
-    const h = audit.head(sid);
-    anchor.anchor({ session_id: sid, seq: h.seq, hash: h.hash }).then((r) => {
-      audit.append(sid, "anchored", { anchored_seq: h.seq, anchored_hash: h.hash, ...r });
-      broadcast({ type: "ANCHORED", session_id: sid, ...r });
-    });
-  },
+  onRoundEnd: (sid) => anchorSession(sid),
 });
+
+/** Commit the session's latest hash to branch audit-log (and push), then note it in the log. */
+function anchorSession(sid) {
+  if (!anchor) return Promise.resolve(null);
+  const h = audit.head(sid);
+  return anchor.anchor({ session_id: sid, seq: h.seq, hash: h.hash }).then((r) => {
+    audit.append(sid, "anchored", { anchored_seq: h.seq, anchored_hash: h.hash, ...r });
+    broadcast({ type: "ANCHORED", session_id: sid, ...r });
+    return r;
+  });
+}
 
 const app = express();
 app.disable("x-powered-by");
@@ -86,6 +91,17 @@ app.get("/api/sessions/:id", (req, res) => {
   if (!entries.length) return res.status(404).json({ error: "ไม่พบ session" });
   res.json({ session_id: req.params.id, verification: verify(entries), rounds: rounds(entries), entries });
 });
+// A friend's conversation from a plain chat (Gemini, ChatGPT, ...) used with share/TEAM_PROMPT.md.
+app.post("/api/import", async (req, res) => {
+  try {
+    const r = importChat(audit, () => pool, req.body || {});
+    const anchored = await anchorSession(r.session_id);
+    res.json({ ...r, anchored });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 app.get("/api/sessions/:id/export.json", (req, res) => {
   let entries;
   try { entries = audit.read(req.params.id); } catch { return res.status(400).end(); }

@@ -84,6 +84,18 @@ test("the session can be read, verified and exported", async () => {
   assert.match(execFileSync("git", ["-C", dir, "show", "audit-log:anchors.jsonl"], { encoding: "utf8" }), /"session_id":"sess-1"/);
 });
 
+test("a friend's chat log can be imported over HTTP and is anchored like the rest", async () => {
+  const text = '```team-log\n{"request":"ทำหน้า about","roles":[{"id":"frontend","why":"หน้าเว็บ","summary":"ทำแล้ว"}],"final":"เสร็จ"}\n```';
+  const r = await (await fetch(BASE + "/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, source: "Gemini", friend: "ปอย" }) })).json();
+  assert.equal(r.rounds, 1);
+  assert.equal(r.anchored.ok, true);
+  const { sessions } = await (await fetch(BASE + "/api/sessions")).json();
+  const s = sessions.find((x) => x.session_id === r.session_id);
+  assert.deepEqual([s.imported, s.source, s.friend], [true, "Gemini", "ปอย"]);
+  const bad = await fetch(BASE + "/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "no log here" }) });
+  assert.equal(bad.status, 422);
+});
+
 test("bad input is refused without breaking anything", async () => {
   assert.equal((await post({ hook_event_name: "Stop", session_id: "../../x" })).status, 200);
   assert.equal((await fetch(BASE + "/api/sessions/..%2F..%2Fx")).status, 400);
