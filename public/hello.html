@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>สวัสดี · Agent Office</title>
+  <meta name="description" content="หน้า Hello เล็ก ๆ สำหรับส่งคำทักทาย เพียงกรอกชื่อแล้วกดทักทาย">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100svh; display: grid; place-items: center; padding: 24px; font-family: system-ui, sans-serif; color: #183c36; background: #edf4ef; }
+    main { width: 100%; max-width: 460px; padding: clamp(24px, 6vw, 44px); background: #fffdf7; border: 1px solid #d7e3d9; border-radius: 28px; box-shadow: 0 20px 70px #183c3610; }
+    .tag { font-size: 12px; letter-spacing: 2px; color: #55766b; }
+    h1 { font-size: 36px; margin: 20px 0 8px; }
+    p { line-height: 1.7; color: #557168; }
+    label { display: block; margin: 28px 0 8px; font-weight: 600; }
+    input, button { font: inherit; width: 100%; padding: 14px 16px; border-radius: 12px; }
+    input { background: white; border: 1px solid #aabfb1; color: #183c36; }
+    button { margin-top: 12px; border: 0; background: #25634e; color: white; cursor: pointer; font-weight: 600; }
+    button:hover { background: #194a39; }
+    .wave { display: inline-grid; place-items: center; width: 72px; height: 72px; margin-top: 28px; border-radius: 22px; background: #f6e9c9; font-size: 38px; }
+    .secondary { background: transparent; color: #25634e; border: 1px solid #aabfb1; }
+    .secondary:hover { background: #edf4ef; }
+    footer { margin-top: 28px; font-size: 12px; color: #557168; text-align: center; }
+    :focus-visible { outline: 3px solid #d29b35; outline-offset: 4px; }
+    #greeting { min-height: 64px; margin: 24px 0 0; padding: 16px; border-radius: 12px; background: #edf4ef; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <main>
+    <span class="tag">AGENT OFFICE · HELLO</span>
+    <div><span class="wave" aria-hidden="true">👋</span></div>
+    <h1>Hello, สวัสดี!</h1>
+    <p>ลองบอกชื่อของคุณ แล้วรับคำทักทายกัน</p>
+    <form id="hello-form">
+      <label for="name">ชื่อของคุณ</label>
+      <input id="name" name="name" placeholder="เช่น บีโม" autocomplete="given-name" maxlength="80" required>
+      <button type="submit">ทักทาย</button>
+      <button type="reset" class="secondary">เริ่มใหม่</button>
+    </form>
+    <p id="greeting" role="status" aria-live="polite">รอทักทายคุณอยู่นะ</p>
+    <footer>คำทักทายเล็ก ๆ สำหรับวันที่ดีของคุณ</footer>
+  </main>
+  <script>
+    const form = document.querySelector('#hello-form');
+    const nameInput = document.querySelector('#name');
+    const greeting = document.querySelector('#greeting');
+    form.addEventListener('reset', () => {
+      nameInput.setCustomValidity('');
+      greeting.textContent = 'รอทักทายคุณอยู่นะ';
+      nameInput.focus();
+    });
+    nameInput.addEventListener('input', () => nameInput.setCustomValidity(''));
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const name = nameInput.value.trim();
+      if (!name) {
+        nameInput.setCustomValidity('กรุณากรอกชื่อก่อนทักทาย');
+        nameInput.reportValidity();
+        return;
+      }
+      greeting.textContent = `สวัสดี ${name} 👋`;
+    });
+  </script>
+</body>
+</html>

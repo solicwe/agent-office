@@ -3,7 +3,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, cpSync, rmSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,8 +19,9 @@ before(async () => {
   execFileSync("git", ["init", "-q", dir]);
   execFileSync("git", ["-C", dir, "config", "user.email", "t@example.com"]);
   execFileSync("git", ["-C", dir, "config", "user.name", "Test"]);
+  mkdirSync(path.join(dir, "codex-sessions"));
   server = spawn(process.execPath, ["server.js"], {
-    env: { ...process.env, PORT: String(PORT), WORKSPACE: dir, LOG_DIR: path.join(dir, "logs"), AUDIT_ANCHOR: "local" },
+    env: { ...process.env, PORT: String(PORT), WORKSPACE: dir, LOG_DIR: path.join(dir, "logs"), AUDIT_ANCHOR: "local", CODEX_SESSIONS_DIR: path.join(dir, "codex-sessions") },
     stdio: "pipe",
   });
   for (let i = 0; i < 200; i++) { // up to 20 s: the first start can be slow
@@ -101,4 +102,24 @@ test("bad input is refused without breaking anything", async () => {
   assert.equal((await fetch(BASE + "/api/sessions/..%2F..%2Fx")).status, 400);
   assert.equal((await fetch(BASE + "/api/sessions/nope")).status, 404);
   assert.equal((await fetch(BASE + "/hooks", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{oops" })).status >= 400, true);
+});
+
+
+test("Codex rollout reaches SSE and a verifiable audit, without automatic anchoring", { timeout: 10000 }, async () => {
+  const file = path.join(dir, "codex-sessions", "rollout.jsonl");
+  const row = (type, payload) => JSON.stringify({timestamp: new Date(Date.now()+1000).toISOString(), type, payload}) + "\n";
+  const got = await events(3, async () => {
+    writeFileSync(file, row("session_meta", {id:"codex-test",cwd:dir,thread_source:"user"}) +
+      row("event_msg", {type:"user_message",message:"ทดสอบ Codex",turn_id:"turn1"}) +
+      row("response_item", {type:"function_call",name:"exec_command",call_id:"call1",arguments:"{}"}) +
+      row("event_msg", {type:"task_complete",turn_id:"turn1",last_agent_message:"เรียบร้อย"}));
+  });
+  assert.ok(got.some(e=>e.source === "codex" && e.type === "TASK_COMPLETE"));
+  const data = await (await fetch(BASE + "/api/sessions/codex-codex-test")).json();
+  assert.equal(data.verification.ok,true);
+  assert.equal(data.entries[0].source,"codex");
+  assert.ok(data.entries.some(e=>e.type === "tool_call"));
+  assert.equal(data.entries.some(e=>e.type === "anchored"),false);
+  const status = await (await fetch(BASE + "/api/codex")).json();
+  assert.equal(status.error,null);
 });

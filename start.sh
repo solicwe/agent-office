@@ -9,9 +9,13 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 [ -d node_modules ] || npm install --no-fund --no-audit || exit 1
 
+if [ ! -f office.local.json ]; then
+  npm run setup || exit 1
+fi
+
 if command -v xdg-open >/dev/null 2>&1; then
   (sleep 2; xdg-open "http://localhost:${PORT}" >/dev/null 2>&1) &
 fi
 echo "Agent Office: http://localhost:${PORT}  (Ctrl+C to stop)"
-echo "Now open Claude Code in this folder and give it a task."
+echo "Open your AI in the project selected during setup, then start a new task."
 npm start

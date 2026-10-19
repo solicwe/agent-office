@@ -11,14 +11,18 @@ import { Flow } from "./src/flow.js";
 import { Anchor } from "./src/anchor.js";
 import { exportJson, exportMarkdown, rounds } from "./src/report.js";
 import { importChat } from "./src/importer.js";
+import { homedir } from "node:os";
+import { CodexBridge } from "./src/codex.js";
+import { readConfig } from "./src/config.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const config = readConfig(here);
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "127.0.0.1";
 const WORKSPACE = path.resolve(process.env.WORKSPACE || here);
 const AGENTS_DIR = path.resolve(process.env.AGENTS_DIR || path.join(WORKSPACE, ".claude", "agents"));
 const LOG_DIR = path.resolve(process.env.LOG_DIR || path.join(here, "logs"));
-const ANCHOR = (process.env.AUDIT_ANCHOR || "github").toLowerCase(); // github | local | off
+const ANCHOR = (process.env.AUDIT_ANCHOR || config.auditAnchor || "off").toLowerCase(); // github | local | off
 
 let pool = loadAgents(AGENTS_DIR);
 const clients = new Set();
@@ -34,10 +38,10 @@ function broadcast(e) {
 // Teammates edit .md files while the office is open: reload and redraw.
 try {
   let timer;
-  watch(AGENTS_DIR, () => {
+    watch(AGENTS_DIR, () => {
     clearTimeout(timer);
     timer = setTimeout(() => { pool = loadAgents(AGENTS_DIR); broadcast({ type: "AGENTS_CHANGED", agents: pool.all, errors: pool.errors }); }, 200);
-  });
+    }).on("error", (err) => console.error("[roles watch]", err.message));
 } catch { /* folder appears later: the next request reloads */ }
 
 const audit = new AuditLog(LOG_DIR);
@@ -48,6 +52,15 @@ const flow = new Flow({
   emit: broadcast,
   onRoundEnd: (sid) => anchorSession(sid),
 });
+
+const codex = (process.env.CODEX_WATCH || (config.provider && config.provider !== "codex" ? "off" : "on")) === "off" ? null : new CodexBridge({
+  dir: path.resolve(process.env.CODEX_SESSIONS_DIR || path.join(process.env.CODEX_HOME || path.join(homedir(), ".codex"), "sessions")),
+  workspace: process.env.CODEX_WORKSPACE || config.workspace || WORKSPACE,
+  stateFile: path.join(LOG_DIR, ".codex-cursors.json"),
+  audit, emit: broadcast,
+  // Codex capture is local by default. Explicit opt-in uses the existing anchor mode.
+  onRoundEnd: (process.env.CODEX_ANCHOR || config.codexAnchor) === "on" ? anchorSession : () => {},
+}).start();
 
 /** Commit the session's latest hash to branch audit-log (and push), then note it in the log. */
 function anchorSession(sid) {
@@ -84,6 +97,7 @@ app.get("/events", (req, res) => {
 });
 
 app.get("/api/agents", (_req, res) => { pool = loadAgents(AGENTS_DIR); res.json({ dir: path.relative(WORKSPACE, AGENTS_DIR) || ".", agents: pool.all, errors: pool.errors }); });
+app.get("/api/codex", (_req, res) => res.json(codex ? { ...codex.status, workspace: codex.workspace } : { enabled: false }));
 app.get("/api/sessions", (_req, res) => res.json({ sessions: audit.sessions(), anchor: ANCHOR }));
 app.get("/api/sessions/:id", (req, res) => {
   let entries;
@@ -121,4 +135,5 @@ app.listen(PORT, HOST, () => {
   console.log(`  Audit logs:   ${LOG_DIR}`);
   console.log(`  Anchoring:    ${ANCHOR === "off" ? "off" : ANCHOR === "local" ? "local git branch audit-log" : "git branch audit-log, pushed to GitHub"}`);
   console.log("  Waiting for Claude Code hooks (.claude/settings.json)\n");
+  console.log(`  Codex: ${codex ? `watching ${codex.workspace} (local rollout, 1s polling)` : "off"}`);
 });

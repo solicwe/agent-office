@@ -88,6 +88,7 @@
     if (!e.session_id) return push(e);
     const s = known.get(e.session_id) || { folder: "", prompt: "", last: 0, busy: false };
     if (e.folder) s.folder = e.folder;
+    if (e.source) s.source = e.source;
     s.last = e.t || Date.now();
     if (e.type === "ORCHESTRATOR_THINKING") { s.busy = true; if (!e.automatic) s.prompt = e.text; }
     if (e.type === "TASK_COMPLETE") s.busy = false;
@@ -96,7 +97,7 @@
     if (watching === "auto") target = !viewing || (e.type === "ORCHESTRATOR_THINKING" && !e.automatic) ? e.session_id : viewing;
     if (target !== viewing && e.session_id === target) {
       viewing = target;
-      push({ type: "SWITCH", session_id: target, folder: s.folder, replay: e.replay, t: e.t });
+      push({ type: "SWITCH", session_id: target, folder: s.folder, source: s.source, replay: e.replay, t: e.t });
     }
     if (e.session_id === viewing) push(e);
     renderWatch();
@@ -120,7 +121,7 @@
     watching = ev.target.value;
     if (watching !== "auto" && watching !== viewing) {
       viewing = watching;
-      push({ type: "SWITCH", session_id: viewing, folder: known.get(viewing)?.folder || "" });
+      push({ type: "SWITCH", session_id: viewing, source: known.get(viewing)?.source, folder: known.get(viewing)?.folder || "" });
     }
     renderWatch();
   });
@@ -146,13 +147,16 @@
 
   async function play(e) {
     switch (e.type) {
-      case "SWITCH":
+      case "SWITCH": {
+        const label = e.source === "codex" ? "Codex" : "Claude";
+        if (nameOf("orchestrator") !== label) build(pool.map(a => a.id === "orchestrator" ? { ...a, name: label } : a));
         allIdle();
         office.lab("idle");
         steps = []; showSteps(); setBoard(""); office.boardDone(false);
         feedItem("switch", "Eye", `กำลังดู session <b>${esc(e.folder || "?")}</b> · <code>${esc(String(e.session_id).slice(0, 8))}</code>`, e.t);
         break;
 
+      }
       case "SESSION_START":
         break;
 
@@ -212,7 +216,7 @@
         status(from, "typing", "ส่งงาน");
         office.moveTo(from, "visit:orchestrator");
         await arrive([from]);
-        office.say(from, e.summary ? `เสร็จแล้ว: ${e.summary}` : "เสร็จแล้ว", "Claude");
+        office.say(from, e.summary ? `เสร็จแล้ว: ${e.summary}` : "เสร็จแล้ว", nameOf("orchestrator"));
         office.react(["orchestrator"], "nod");
         await pause(1200);
         office.moveTo(from, "desk");
@@ -230,7 +234,7 @@
         office.lab("idle");
         office.moveTo("orchestrator", "desk");
         steps.forEach((x) => { x.state = "done"; }); showSteps();
-        feedItem("done", "BadgeCheck", `<b>เสร็จ</b> ${e.agents ? `ใช้ ${e.agents} agent` : "Claude ทำเอง ไม่ได้เรียก agent"}${e.summary ? `<div class="sub">${esc(e.summary)}</div>` : ""}`, e.t);
+        feedItem("done", "BadgeCheck", `<b>เสร็จ</b> ${e.agents ? `ใช้ ${e.agents} agent` : `${esc(nameOf("orchestrator"))} ทำเอง ไม่ได้เรียก agent`}${e.summary ? `<div class="sub">${esc(e.summary)}</div>` : ""}`, e.t);
         if (!e.replay) {
           office.say("orchestrator", e.summary || "เสร็จแล้ว");
           office.react(window.AgentOffice.ORDER, "jump");
@@ -258,7 +262,7 @@
         renderRoles(e.agents, e.errors);
         fetch("/api/agents").then((r) => r.json()).then((d) => renderRoles(d.agents, d.errors, d.dir)).catch(() => {});
         // Catch up on what happened before this window opened, without the walking.
-        feed.innerHTML = `<div class="empty">ยังไม่มีงาน<br>เปิด Claude Code ในโฟลเดอร์นี้ แล้วพิมพ์งานได้เลย ตัวละครจะขยับตามที่ Claude ทำจริง</div>`;
+        feed.innerHTML = `<div class="empty">ยังไม่มีงาน<br>เปิด Codex หรือ Claude Code ในโฟลเดอร์นี้ แล้วพิมพ์งานเพื่อดูการทำงาน</div>`;
         for (const r of e.recent) route({ ...r, replay: true });
         return;
       }
@@ -283,7 +287,7 @@
     const sel = $("#sessionSelect");
     const was = keep ? sel.value : null;
     sel.innerHTML = sessions.length
-      ? sessions.map((s) => `<option value="${esc(s.session_id)}">${s.imported ? `[แชท ${esc(s.source)}${s.friend ? ` · ${esc(s.friend)}` : ""}] ` : ""}${esc(new Date(s.updated).toLocaleString("th-TH"))} · ${esc(s.first_prompt || s.session_id.slice(0, 8))} (${s.prompts} รอบ)</option>`).join("")
+      ? sessions.map((s) => `<option value="${esc(s.session_id)}">${s.source === "codex" ? "[Codex สด] " : ""}${s.imported ? `[แชท ${esc(s.source)}${s.friend ? ` · ${esc(s.friend)}` : ""}] ` : ""}${esc(new Date(s.updated).toLocaleString("th-TH"))} · ${esc(s.first_prompt || s.session_id.slice(0, 8))} (${s.prompts} รอบ)</option>`).join("")
       : `<option value="">ยังไม่มี session</option>`;
     const pick = (was && sessions.some((s) => s.session_id === was) ? was : sessions[0]?.session_id) || "";
     sel.value = pick;
@@ -306,7 +310,8 @@
       ? `${window.icon("ShieldCheck", 16)}<div><b>hash chain ถูกต้อง</b><span>${v.count} entries · head <code>${esc(v.head.slice(0, 16))}…</code></span></div>`
       : `${window.icon("ShieldAlert", 16)}<div><b>log ถูกแก้ไข</b><span>${esc(v.reason)}</span></div>`;
     const first = d.entries[0] || {};
-    $("#importedNote").hidden = !first.imported;
+    $("#importedNote").hidden = !first.imported && first.source !== "codex";
+    if (first.source === "codex" && !first.imported) $("#importedNote").textContent = "Codex สด · อ่านเหตุการณ์จากไฟล์ session ในเครื่อง อาจเริ่มจับกลางรอบ ยังไม่แสดงความสัมพันธ์ subagent และโทเค็น";
     if (first.imported) $("#importedNote").innerHTML = `${window.icon("Info", 14)}<span><b>นำเข้าจากแชท ${esc(first.source)}${first.friend ? ` ของ ${esc(first.friend)}` : ""}</b> · AI ในแชทรายงานเอง ไม่ได้จับจากการทำงานจริงของ Claude Code hash chain พิสูจน์ได้แค่ว่าไม่ถูกแก้หลังนำเข้า</span>`;
     $("#auditActions").hidden = false;
     $("#exportJson").href = `/api/sessions/${encodeURIComponent(id)}/export.json`;
@@ -316,7 +321,7 @@
         <h4>รอบที่ ${i + 1} <time>${esc(new Date(round.prompt.ts).toLocaleString("th-TH"))}</time></h4>
         <div class="step user"><span class="dotc"></span><div><b>1. คำสั่งของผู้ใช้</b><p>${round.prompt.missed ? `<span class="muted">ไม่ได้บันทึกคำสั่ง: Agent Office ยังไม่เปิดตอนที่ส่งคำสั่งนี้ ขั้นตอนหลังจากนั้นบันทึกครบ</span>` : round.prompt.automatic ? `<span class="tag">อัตโนมัติ</span> <span class="muted">ข้อความจาก Claude Code (เช่นงานเบื้องหลังเสร็จ) ไม่ใช่คำสั่งของผู้ใช้</span>` : esc(round.prompt.prompt)}</p></div></div>
         <div class="step orch"><span class="dotc"></span><div><b>2. Orchestrator เลือก ${round.steps.length} งาน</b>
-          <p>${round.steps.length ? round.steps.map((s) => `${window.AgentOffice.avatar(pool.some((a) => a.id === s.assigned.agent) ? s.assigned.agent : "helper", 18)} ${esc(s.assigned.agent)}`).join(" → ") : "ไม่ได้เรียก agent ย่อย Claude ทำเอง"}${round.steps.some((s) => s.assigned.execution === "parallel") ? ` <span class="tag">มีงานขนาน</span>` : ""}</p></div></div>
+          <p>${round.steps.length ? round.steps.map((s) => `${window.AgentOffice.avatar(pool.some((a) => a.id === s.assigned.agent) ? s.assigned.agent : "helper", 18)} ${esc(s.assigned.agent)}`).join(" → ") : "ไม่ได้เรียก agent ย่อย ผู้ช่วยหลักทำเอง"}${round.steps.some((s) => s.assigned.execution === "parallel") ? ` <span class="tag">มีงานขนาน</span>` : ""}</p></div></div>
         ${round.steps.map((s, j) => `
           <div class="step agent"><span class="dotc" style="--c:${esc(pool.find((a) => a.id === s.assigned.agent)?.color || "#6b7a8f")}"></span><div>
             <b>3.${j + 1} ${esc(s.assigned.agent)}</b> <span class="muted small">${esc([s.assigned.execution, secs(s.result?.duration_ms)].filter(Boolean).join(" · "))}</span>

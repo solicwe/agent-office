@@ -12,7 +12,11 @@ fi
 
 [ -d node_modules ] || npm install --no-fund --no-audit || { read -r -p "ติดตั้งไม่สำเร็จ กด Enter เพื่อปิด"; exit 1; }
 
+if [ ! -f office.local.json ]; then
+  npm run setup || exit 1
+fi
+
 (sleep 2; open "http://localhost:${PORT}") &
 echo "Agent Office: http://localhost:${PORT}  (ปิดหน้าต่างนี้เพื่อหยุด)"
-echo "จากนั้นเปิด Claude Code ในโฟลเดอร์นี้แล้วสั่งงานได้เลย"
+echo "เปิด AI ของคุณในโฟลเดอร์ที่เลือกตอนตั้งค่า แล้วสั่งงานได้เลย"
 npm start

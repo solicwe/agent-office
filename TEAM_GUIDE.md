@@ -1,5 +1,7 @@
 # คู่มือทีม: สร้าง agent ของตัวเองด้วยไฟล์ .md
 
+สำหรับการเริ่มใช้จาก Git การเลือก Codex/Claude Code และการตั้งค่าเครื่องของคุณ ให้เริ่มที่ [คู่มือใช้งาน](docs/USAGE.md) ส่วนเอกสารนี้เน้น roles, hooks ของ Claude และรายละเอียด audit
+
 Agent Office คือหน้าต่างที่เปิดข้าง Claude Code เราสั่งงานใน Claude Code ตามปกติ ส่วนหน้าต่างนี้แสดงตัวการ์ตูนขยับตามที่ Claude ทำจริง และบันทึกทุกขั้นเป็น audit log ที่ตรวจสอบได้
 
 หน้าต่างนี้ไม่เรียก AI เอง จึง **ไม่เสียโทเค็นเพิ่มเลย** โทเค็นที่ใช้มีแค่ของ Claude Code
@@ -98,6 +100,8 @@ hash ของ log ยึดขึ้น GitHub ของ **Agent Office** เ�
 
 ## Audit log สำหรับส่งอาจารย์
 
+ค่าเริ่มต้นเก็บ log ในเครื่อง ไม่ยึด hash ไป GitHub หากต้องการใช้ขั้นตอนยึด hash ด้านล่าง ให้ตั้ง `AUDIT_ANCHOR=github` และตั้งค่า Git remote/สิทธิ์ push ของตัวเองก่อนเปิด Office สำหรับ Codex ต้องตั้ง `CODEX_ANCHOR=on` เพิ่มด้วย
+
 ทุกคำสั่งถูกบันทึกในแท็บ **Audit log** และในไฟล์ `logs/<session>.jsonl`
 
 ในแต่ละรอบมี:
@@ -129,7 +133,7 @@ npm run verify -- audit-xxxx.json
 | ตัวแปร | ค่าเริ่มต้น | ความหมาย |
 |---|---|---|
 | `PORT` | `3000` | ถ้าเปลี่ยน ต้องแก้ URL ใน `.claude/settings.json` ด้วย |
-| `AUDIT_ANCHOR` | `github` | `github` = commit แล้ว push, `local` = commit อย่างเดียว, `off` = ไม่ยึด |
+| `AUDIT_ANCHOR` | `off` | `github` = commit แล้ว push, `local` = commit อย่างเดียว, `off` = ไม่ยึด |
 | `LOG_DIR` | `logs` | โฟลเดอร์เก็บ log |
 | `WORKSPACE` | โฟลเดอร์นี้ | โฟลเดอร์ที่มี `.claude/agents` และเป็น git repo ที่ใช้ยึด hash |
 

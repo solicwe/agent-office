@@ -72,7 +72,7 @@ export class AuditLog {
         first_prompt: e.find((x) => x.type === "user_prompt")?.prompt?.slice(0, 120) || "",
         entries: e.length,
         imported: Boolean(e[0]?.imported),
-        source: e[0]?.imported ? e[0].source : "claude-code",
+        source: e[0]?.imported ? e[0].source : e[0]?.source === "codex" ? "codex" : "claude-code",
         friend: e[0]?.friend || "",
         head: e.at(-1)?.hash || null,
       };

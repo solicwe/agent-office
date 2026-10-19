@@ -10,7 +10,9 @@
     "verify": "node scripts/verify.js",
     "export-team": "node scripts/export-team.js",
     "attach": "node scripts/attach.js",
-    "detach": "node scripts/attach.js --detach"
+    "detach": "node scripts/attach.js --detach",
+    "setup": "node scripts/setup.js",
+    "package-friends": "node scripts/package-friends.js"
   },
   "engines": {
     "node": ">=20"

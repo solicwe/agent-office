@@ -53,6 +53,7 @@ export function exportMarkdown(sessionId, entries) {
     `- ส่งออกเมื่อ: ${new Date().toISOString()}`,
     `- เริ่ม session: ${entries[0]?.ts || "-"}${start?.model ? ` · model ${start.model}` : ""}`,
     `- จำนวน entry: ${entries.length}`,
+    ...(start?.source === "codex" ? ["- **ที่มา: Codex local rollout** อ่านเหตุการณ์จากไฟล์ session ในเครื่อง ไม่ใช่ log ที่ AI เขียนรายงานเอง อาจเริ่มจับกลางรอบและยังไม่มีข้อมูลความสัมพันธ์ subagent หรือโทเค็น"] : []),
     ...(start?.imported ? [`- **ที่มา: นำเข้าจากแชท ${start.source}${start.friend ? ` ของ ${start.friend}` : ""}** ข้อมูลในรอบเหล่านี้ AI ในแชทรายงานเอง (ไม่ได้จับจาก hook ของ Claude Code) hash chain พิสูจน์ได้ว่าไม่ถูกแก้หลังนำเข้า และต้นฉบับข้อความทั้งหมดมี sha256 \`${start.raw_sha256}\``] : []),
     `- ตรวจ hash chain: ${v.ok ? `**ผ่าน** (head \`${v.head}\`)` : `**ไม่ผ่าน** ที่ entry ${v.at}: ${v.reason}`}`,
     "",
@@ -60,7 +61,7 @@ export function exportMarkdown(sessionId, entries) {
   rounds(entries).forEach((r, i) => {
     md.push(`## รอบที่ ${i + 1} · ${r.prompt.ts}`, "", "### 1. คำสั่งของผู้ใช้", r.prompt.missed ? MISSED : r.prompt.automatic ? "(ข้อความอัตโนมัติจาก Claude Code เช่นงานเบื้องหลังเสร็จ ไม่ใช่คำสั่งของผู้ใช้)\n" + fence(r.prompt.prompt) : fence(r.prompt.prompt), "");
     md.push("### 2. Orchestrator ตัดสินใจ", "");
-    if (!r.steps.length) md.push("ไม่ได้เรียก agent ย่อย (Claude ตอบเองทั้งหมด)", "");
+    if (!r.steps.length) md.push("ไม่ได้เรียก agent ย่อย (ผู้ช่วยหลักตอบเองทั้งหมด)", "");
     else {
       md.push(`เลือก ${r.steps.length} งาน: ${r.steps.map((s) => s.assigned.agent).join(", ")}`, "");
       md.push("| # | Agent | ไฟล์ .md (sha256) | งาน | แบบ | เวลา | tokens |", "|---|---|---|---|---|---|---|");

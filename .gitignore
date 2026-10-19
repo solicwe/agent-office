@@ -1,4 +1,5 @@
 node_modules
+.DS_Store
 .env
 # audit logs stay on the machine; only their hashes go to branch audit-log
 logs/
@@ -9,3 +10,7 @@ data/
 .claude/*
 !.claude/agents/
 !.claude/settings.json
+
+# Per-machine preferences and distribution archives
+office.local.json
+dist/

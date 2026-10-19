@@ -1,26 +1,33 @@
 # Agent Office
 
-หน้าต่างที่เปิดข้าง **Claude Code**: กำหนดทีม agent ด้วยไฟล์ Markdown ดูตัวการ์ตูนทำงานตามที่ Claude ทำจริงแบบสด และเก็บ audit log แบบ hash chain ที่ยึดกับ GitHub เพื่อพิสูจน์การทำงานได้
+หน้าต่างดู **Codex และ Claude Code** ทำงานบนเครื่องคุณ พร้อมบันทึก audit log แบบ hash chain ส่วน ChatGPT / Gemini บนเว็บใช้วิธีนำเข้า `team-log` ภายหลัง
 
+แต่ละคนใช้บัญชี AI ของตัวเอง Agent Office ไม่เรียกโมเดลเพิ่ม และเก็บ log ในเครื่องโดยไม่ push hash ขึ้น GitHub เป็นค่าเริ่มต้น
+
+## เริ่มใช้งานจาก Git
+
+ติดตั้ง Git, Node.js 20+ และโปรแกรม AI ที่คุณลงชื่อเข้าใช้ไว้แล้ว จากนั้น:
+
+```bash
+git clone https://github.com/solicwe/agent-office.git
+cd agent-office
+npm install
+npm run setup
+npm start
 ```
-คุณพิมพ์ใน Claude Code
-   │
-   ▼
-Claude Code (Orchestrator) ── อ่าน .claude/agents/*.md ── เลือก role เอง (กี่ตัว ตัวไหน ต่อกันหรือพร้อมกัน)
-   │ hooks (http, ไม่ทำให้ Claude ช้าลง)
-   ▼
-Agent Office (localhost:3000, ในเครื่องเท่านั้น)
-   ├─ ตัวการ์ตูน: คิด → เดินไปมอบงาน → พิมพ์ที่โต๊ะ → ส่งงานคืน → เสร็จ   (ในเบราว์เซอร์ 0 โทเค็น)
-   └─ Audit log: logs/<session>.jsonl (hash chain) → hash ล่าสุด commit ลง branch audit-log แล้ว push
-```
 
-## เริ่มใช้
+เลือก AI และโฟลเดอร์งานใน setup เปิด **http://localhost:3000** แล้วสั่งงานรอบใหม่ใน AI ภายในโฟลเดอร์ที่เลือก
 
-1. Node.js 20+ และ Claude Code
-2. `start.bat` (Windows) / `start.command` (Mac) / `./start.sh` (Linux) → เปิด http://localhost:3000
-3. เปิด Claude Code ในโฟลเดอร์นี้ แล้วสั่งงานตามปกติ
+ครั้งต่อไปเปิดด้วย `npm start` หรือใช้ `start.command` (Mac), `start.bat` (Windows), `bash start.sh` (Linux) ตัวเปิดโปรแกรมจะถาม setup เฉพาะครั้งที่ยังไม่มีค่าเครื่องนี้
 
-คู่มือเต็ม (สร้าง role, ส่ง log ให้อาจารย์, ตั้งค่า): [TEAM_GUIDE.md](TEAM_GUIDE.md)
+**[อ่านคู่มือการใช้งานฉบับเต็ม → docs/USAGE.md](docs/USAGE.md)**
+
+- การติดตั้ง ตั้งค่า และเชื่อม AI ของแต่ละคน
+- ดูเหตุการณ์สด นำเข้า log และส่งออกรายงาน
+- เปลี่ยนโปรเจกต์ อัปเดตจาก Git และแก้ปัญหาเบื้องต้น
+- ค่าเฉพาะเครื่อง ขอบเขตการอ่านข้อมูล และข้อจำกัดของ Codex
+
+คู่มือสร้าง role และรายละเอียด audit: [TEAM_GUIDE.md](TEAM_GUIDE.md)
 
 ## โครงสร้าง
 
@@ -30,6 +37,10 @@ Agent Office (localhost:3000, ในเครื่องเท่านั้�
 docs/agent-template.md  แม่แบบ role ใหม่
 server.js               รับ hooks, ส่ง event ให้หน้าเว็บ (SSE), API ของ audit log
 src/agents.js           อ่านและตรวจไฟล์ .md
+src/codex.js            อ่าน session Codex ที่ตรงกับโฟลเดอร์งาน
+src/config.js           อ่าน office.local.json ของเครื่องนี้
+scripts/setup.js        เลือก AI และโฟลเดอร์งาน
+docs/USAGE.md           คู่มือใช้งานจาก Git
 src/flow.js             แปลง hook → audit entry + event ของตัวละคร
 src/transcript.js       อ่านโทเค็นจริงและเหตุผลของ Claude จาก transcript
 src/audit.js            hash chain + ตรวจสอบ
@@ -53,8 +64,35 @@ test/                   npm test
 | PreToolUse (เครื่องมืออื่น) | AGENT_WORKING | คนที่ทำอยู่พิมพ์ พร้อมป้ายว่ากำลังทำอะไร เช่น "แก้ cart.html" |
 | PostToolUse (Agent) | AGENT_HANDOFF | role นั้นเดินเอางานไปส่ง Claude |
 | SubagentStop | AGENT_DONE | กลับไปว่าง |
-| Stop | TASK_COMPLETE | ทุกคนกระโดด มีพลุ แล้วยึด hash ขึ้น GitHub |
+| Stop | TASK_COMPLETE | ทุกคนกระโดด มีพลุ และยึด hash เมื่อเปิดใช้งาน |
 
 subagent ในตัวของ Claude Code (Explore, Plan, general-purpose) นั่งที่โต๊ะ Helper
 
 เวอร์ชันเดิม (ระบบสร้างเว็บที่เรียก AI เอง) อยู่ที่ branch `v1-web-builder`
+
+## ดู Codex ทำงานสด (บนเครื่องเดียวกัน)
+
+เปิด Agent Office ด้วย `npm start` หรือ `start.command` ตามเดิม แล้วสั่งงานใน Codex Desktop/CLI ในโฟลเดอร์งานที่เลือกใน setup ไม่ต้องคัดลอก `team-log` หรือเพิ่ม hooks ของ Claude ให้ Codex ตัวเชื่อมอ่านไฟล์ session ที่ Codex เขียนใน `~/.codex/sessions` ทุก 1 วินาที และแสดง Codex ทำงานที่โต๊ะผู้ช่วยหลัก เมื่อมีการใช้เครื่องมือ รันคำสั่ง แก้ไฟล์ และจบงาน จะมีเหตุการณ์และ audit log แหล่งที่มา `codex` แยกจาก log แชทที่ AI รายงานเอง
+
+- อ่านเฉพาะ session ที่ `cwd` ตรงกับโฟลเดอร์งานที่เลือกใน setup เปิด Office ก่อนส่งคำสั่งรอบใหม่เพื่อเก็บครบ
+- ตอนเปิดครั้งแรกข้ามประวัติเก่า เก็บตำแหน่งอ่านใน `logs/.codex-cursors.json` เพื่ออ่านต่อหลัง restart ได้
+- ไม่สร้างภาพการมอบหมายงานให้ทั้ง 7 roles ถ้าไม่มีข้อมูลการเรียกจริง เวอร์ชันนี้แสดงเครื่องมือของแต่ละ session ที่โต๊ะ Codex ยังไม่แสดงความสัมพันธ์ subagent
+- Codex log เก็บในเครื่องเป็นค่าเริ่มต้น หากต้องการยึด hash ตาม `AUDIT_ANCHOR` ให้ตั้ง `CODEX_ANCHOR=on` (โหมด github จะ push hash ไป origin) ไม่รายงาน token ถ้าไม่มีการคำนวณจากข้อมูลจริง
+- รูปแบบ rollout เป็นข้อมูลภายในของ Codex ที่อาจเปลี่ยนได้ รองรับรูปแบบที่ตรวจพบในเครื่องนี้ ไม่ใช่การสมัครรับเหตุการณ์ผ่าน API ทางการ และเหตุการณ์จะปรากฏหลัง Codex เขียนไฟล์แล้ว
+
+ดูสถานะตัวเชื่อม: `http://localhost:3000/api/codex` (`files` คือจำนวนไฟล์ session ที่ตรงกับ workspace, `error` คือปัญหาการอ่าน)
+
+ตัวแปรเพิ่มเติม:
+
+```bash
+# ดู Codex ของโปรเจกต์อื่น โดยเก็บ log ไว้ใน Agent Office ตามเดิม
+CODEX_WORKSPACE=/absolute/path/to/project npm start
+
+# ปิดตัวเชื่อม Codex
+CODEX_WATCH=off npm start
+
+# กำหนดโฟลเดอร์ session เอง
+CODEX_SESSIONS_DIR=/absolute/path/to/sessions npm start
+```
+
+ไฟล์ Codex ต้นฉบับไม่ถูกแก้ไข ไม่ต้องใช้ API key เพิ่ม และไม่ส่งข้อความหรือผลเครื่องมือไปบริการภายนอกโดยตัวเชื่อมนี้

@@ -27,7 +27,6 @@ const status = (dir) => git(dir, "status", "--porcelain", "--untracked-files=all
 
 test("attach: roles and hooks for this machine only, the repo's own role kept, nothing to commit", () => {
   const dir = friendRepo();
-  const before = status(dir);
   const r = attach(dir, { port: 3123 });
   assert.equal(r.copied.length, 6);
   assert.deepEqual(r.skipped, ["frontend.md"], "the friend's own frontend role is not overwritten");
@@ -36,7 +35,7 @@ test("attach: roles and hooks for this machine only, the repo's own role kept, n
   const s = JSON.parse(readFileSync(path.join(dir, ".claude", "settings.local.json"), "utf8"));
   assert.deepEqual(s.permissions, { allow: ["Bash(npm test)"] }, "existing personal settings kept");
   assert.equal(s.hooks.Stop[0].hooks[0].url, "http://127.0.0.1:3123/hooks");
-  assert.equal(status(dir), before, "git sees nothing new to commit");
+  assert.equal(status(dir), "", "personal settings and installed roles are excluded from Git");
   attach(dir, { port: 3123 });
   const again = JSON.parse(readFileSync(path.join(dir, ".claude", "settings.local.json"), "utf8"));
   assert.equal(again.hooks.Stop.length, 1, "attaching twice adds nothing twice");
@@ -44,6 +43,7 @@ test("attach: roles and hooks for this machine only, the repo's own role kept, n
 
 test("detach: the repo is back to exactly how it was", () => {
   const dir = friendRepo();
+  const statusBefore = status(dir);
   const settingsBefore = readFileSync(path.join(dir, ".claude", "settings.local.json"), "utf8");
   attach(dir);
   const r = detach(dir);
@@ -52,7 +52,7 @@ test("detach: the repo is back to exactly how it was", () => {
   assert.match(readFileSync(path.join(dir, ".claude", "agents", "frontend.md"), "utf8"), /Friend's rules/);
   assert.ok(!existsSync(path.join(dir, ".claude", "agents", "reviewer.md")));
   assert.doesNotMatch(readFileSync(path.join(dir, ".git", "info", "exclude"), "utf8"), /agent-office/);
-  assert.equal(status(dir), "");
+  assert.equal(status(dir), statusBefore, "restore the original Git visibility of existing settings");
 });
 
 test("a copied role you edited after attaching is kept by detach", () => {
