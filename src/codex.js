@@ -34,13 +34,27 @@ export class CodexBridge {
   handle(record, meta) {
     const id = meta.id || meta.session_id;
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '')) return;
-    const sid = `codex-${id}`;
+    const child = !!meta.parent_thread_id;
+    const sid = `codex-${child ? meta.root_id : id}`;
+    const actor = child ? meta.desk : 'orchestrator';
+    const identity = { source_session_id: id, parent_session_id: meta.parent_thread_id || null, agent_path: meta.agent_path || null };
+    const root = this.state.sessions[sid] ||= { seen: [], active: false };
+
     const p = record.payload || {};
-    const s = this.state.sessions[sid] ||= { seen: [], active: false };
-    const log = (type, data) => this.audit.append(sid, type, { source: 'codex', capture: 'local-rollout', event_timestamp: record.timestamp || null, ...data });
-    const vis = (type, data = {}) => this.emit({ type, session_id: sid, source: 'codex', folder: path.basename(meta.cwd), ...data });
-    const once = key => { if (s.seen.includes(key)) return false; s.seen.push(key); if(s.seen.length > 1000) s.seen.shift(); return true; };
+    const s = child ? (this.state.sessions[`codex-${id}`] ||= { seen: [], active: false }) : root;
+    const log = (type, data) => this.audit.append(sid, type, { source: 'codex', capture: 'local-rollout', event_timestamp: record.timestamp || null, source_event_id: p.call_id || p.item?.id || p.id || `${record.type}:${p.type}:${p.turn_id || record.timestamp || digest(JSON.stringify(p))}`, ...identity, ...data });
+    const vis = (type, data = {}) => this.emit({ type, session_id: sid, source: 'codex', folder: path.basename(meta.cwd), ...identity, ...data });
+    const once = key => { if (s.seen.includes(key)) return false; s.seen.push(key); return true; };
     const ensure = () => {
+      if (child && (!s.assigned || !root.children?.includes(id))) {
+        if (!root.logged) { if (!this.audit.read(sid).length) { log('session_start', { cwd: meta.cwd, model: 'Codex', partial: true }); vis('SESSION_START'); } root.logged = true; }
+        s.assigned = true;
+        root.children ||= [];
+        root.child_roles ||= {}; root.child_roles[id] = actor;
+        if (!root.children.includes(id)) root.children.push(id);
+        log('agent_assigned', { actor, agent: actor, agent_type: meta.agent_path, subtask: meta.agent_path, input: meta.agent_path, execution: root.children.length > 1 ? 'parallel' : 'sequential', tool_use_id: `${id}:${p.turn_id || record.timestamp}`, parent_thread_id: meta.parent_thread_id });
+        vis('AGENT_ASSIGNED', { from: 'orchestrator', to: actor, agent: meta.agent_path, subtask: meta.agent_path, parallel: root.children.length > 1 });
+      }
       if (!s.logged) {
         if (!this.audit.read(sid).length) { log('session_start', { cwd: meta.cwd, model: 'Codex', partial: true }); vis('SESSION_START'); }
         s.logged = true;
@@ -52,29 +66,36 @@ export class CodexBridge {
         const prompt = p.message || text(item.content);
         if (!once(`prompt:${p.turn_id || digest(prompt)}`)) return;
         ensure(); s.active = true; s.started = Date.now();
+        if (child) { log('agent_prompt', { actor, prompt: clip(prompt) }); return; }
         log('user_prompt', { prompt: clip(prompt), prompt_sha256: digest(prompt), cwd: meta.cwd });
         vis('ORCHESTRATOR_THINKING', { text: clip(prompt, 120) });
       } else if (p.type === 'task_started') {
         if (!once(`start:${p.turn_id || record.timestamp}`)) return;
-        ensure(); s.active = true; s.started = Date.now(); vis('AGENT_WORKING', { agent: 'orchestrator', badge: 'Codex เริ่มทำงาน' });
+        if (!child) { root.children = []; root.child_roles = {}; }
+        ensure(); s.active = true; s.started = Date.now(); vis('AGENT_WORKING', { agent: actor, badge: 'Codex เริ่มทำงาน' });
       } else if (p.type === 'task_complete' || p.type === 'turn_aborted') {
         if (!once(`end:${p.turn_id || record.timestamp}`)) return;
         ensure(); s.active = false;
         const output = p.last_agent_message || (p.type === 'turn_aborted' ? 'หยุดงานแล้ว' : '');
-        log('final_response', { text: clip(output), text_sha256: digest(output), agents_used: [], agent_count: 0, duration_ms: p.duration_ms ?? (s.started ? Date.now() - s.started : null), interrupted: p.type === 'turn_aborted' });
-        vis('TASK_COMPLETE', { summary: clip(output, 160), agents: 0 }); this.onRoundEnd(sid);
+        log(child ? 'agent_result' : 'final_response', { ...(child ? { agent: actor, actor, output: clip(output), output_sha256: digest(output), tool_use_id: `${id}:${p.turn_id || record.timestamp}` } : {}), text: clip(output), text_sha256: digest(output), agents_used: (root.children || []).map(id => root.child_roles?.[id] || 'helper'), child_sessions: root.children || [], agent_count: root.children?.length || 0, duration_ms: p.duration_ms ?? (s.started ? Date.now() - s.started : null), interrupted: p.type === 'turn_aborted' });
+        if (child) {
+          s.assigned = false;
+          log('agent_finished', { actor, agent: actor, interrupted: p.type === 'turn_aborted' });
+          vis('AGENT_HANDOFF', { from: actor, to: 'orchestrator', summary: clip(output, 160) });
+          vis('AGENT_DONE', { agent: actor });
+        } else { vis('TASK_COMPLETE', { summary: clip(output, 160), agents: root.children?.length || 0 }); this.onRoundEnd(sid); }
       } else if (p.type === 'item_completed' && ['CommandExecution', 'FileChange', 'McpToolCall'].includes(item.type)) {
         if (!once(`item:${item.id || digest(JSON.stringify(item))}`)) return;
         ensure();
         const summary = item.type === 'CommandExecution' ? `รัน ${clip(item.command, 100)}` : item.type === 'FileChange' ? 'แก้ไฟล์' : `ใช้ ${item.tool}`;
-        log('tool_call', { actor: 'orchestrator', tool: item.type, summary, tool_use_id: item.id, status: item.status, exit_code: item.exit_code ?? null });
-        vis('AGENT_WORKING', { agent: 'orchestrator', badge: summary, tool: item.type });
+        log('tool_call', { actor, tool: item.type, summary, tool_use_id: item.id, status: item.status, exit_code: item.exit_code ?? null });
+        vis('AGENT_WORKING', { agent: actor, badge: summary, tool: item.type });
       }
     } else if (record.type === 'response_item' && ['function_call', 'custom_tool_call'].includes(p.type)) {
       if (!once(`call:${p.call_id || p.id || digest(JSON.stringify(p))}`)) return;
       ensure();
-      log('tool_call', { actor: 'orchestrator', tool: p.name, summary: `ใช้ ${p.name}`, tool_use_id: p.call_id || p.id, input_sha256: digest(p.arguments || p.input || '') });
-      vis('AGENT_WORKING', { agent: 'orchestrator', badge: `ใช้ ${p.name}`, tool: p.name });
+      log('tool_call', { actor, tool: p.name, summary: `ใช้ ${p.name}`, tool_use_id: p.call_id || p.id, input_sha256: digest(p.arguments || p.input || '') });
+      vis('AGENT_WORKING', { agent: actor, badge: `ใช้ ${p.name}`, tool: p.name });
     }
   }
   poll() {
@@ -84,21 +105,29 @@ export class CodexBridge {
         const first = firstLine(file);
         if (!first) continue;
         const metadata = first.type === 'session_meta' ? first.payload : null;
-        // Approval reviewers and other internal workers are not user chats.
+        const spawn = metadata?.source?.subagent?.thread_spawn;
+        const child = metadata?.thread_source === 'subagent' && spawn?.parent_thread_id;
+        // Only explicit thread_spawn workers are supported. Guardian/internal workers stay private.
         if (!metadata?.cwd || path.resolve(metadata.cwd) !== this.workspace ||
-            (metadata.thread_source && metadata.thread_source !== 'user') ||
-            (metadata.source && typeof metadata.source !== 'string')) {
+            (!child && ((metadata.thread_source && metadata.thread_source !== 'user') ||
+            (metadata.source && typeof metadata.source !== 'string')))) {
           delete this.state.files[file]; continue;
         }
         const stat = statSync(file);
+        const meta = metadata;
+        const agentPath = meta.agent_path || spawn?.agent_path || '';
+        const role = spawn?.agent_role || agentPath.split('/').pop();
+        const cleanMeta = { id: meta.id || meta.session_id, cwd: meta.cwd,
+          ...(child ? { parent_thread_id: spawn.parent_thread_id, root_id: meta.session_id || spawn.parent_thread_id,
+            agent_path: agentPath, created_at: meta.timestamp,
+            desk: ['pm', 'architect', 'backend', 'frontend', 'qa', 'debugger', 'reviewer'].includes(role) ? role : 'helper' } : {}) };
         if (!cursor) {
-          const meta = metadata;
           if (!meta?.cwd || path.resolve(meta.cwd) !== this.workspace) continue;
           // Start from EOF: earlier conversations must not be imported or replayed.
-          const cleanMeta = { id: meta.id || meta.session_id, cwd: meta.cwd };
           cursor = this.state.files[file] = { offset: this.initialized ? 0 : stat.size, meta: cleanMeta };
           if (!this.initialized) continue;
         }
+        cursor.meta = cleanMeta; // Revalidate even cursors saved by older adapter versions.
         if (stat.size < cursor.offset) { cursor.offset = stat.size; continue; }
         const fd = openSync(file, 'r');
         try {
@@ -108,12 +137,14 @@ export class CodexBridge {
           if (end < 0) continue; // leave partial JSON/UTF-8 untouched until the next poll
           for (const line of b.subarray(0, end).toString('utf8').split('\n')) {
             let r; try { r = JSON.parse(line); } catch { continue; }
+            // Forks contain their parent's transcript. Never attribute inherited rows to a child.
+            if (cursor.meta.created_at && Date.parse(r.timestamp) < Date.parse(cursor.meta.created_at)) continue;
             if (Date.parse(r.timestamp) >= this.startedAt || this.state.sessions[`codex-${cursor.meta.id}`]) this.handle(r, cursor.meta);
           }
           cursor.offset += end + 1;
         } finally { closeSync(fd); }
       }
-      this.initialized = true; this.save(); this.status.files = Object.keys(this.state.files).length; this.status.error = null;
+      this.initialized = true; this.save(); this.status.files = Object.keys(this.state.files).length; this.status.activeChildren = Object.values(this.state.files).filter(c => c.meta.parent_thread_id && this.state.sessions[`codex-${c.meta.id}`]?.active).map(c => c.meta.id).filter((id, i, ids) => ids.indexOf(id) === i).length; this.status.error = null;
     } catch (e) { this.status.error = e.message; }
     return this.status;
   }

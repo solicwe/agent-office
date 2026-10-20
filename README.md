@@ -76,7 +76,7 @@ subagent ในตัวของ Claude Code (Explore, Plan, general-purpose) �
 
 - อ่านเฉพาะ session ที่ `cwd` ตรงกับโฟลเดอร์งานที่เลือกใน setup เปิด Office ก่อนส่งคำสั่งรอบใหม่เพื่อเก็บครบ
 - ตอนเปิดครั้งแรกข้ามประวัติเก่า เก็บตำแหน่งอ่านใน `logs/.codex-cursors.json` เพื่ออ่านต่อหลัง restart ได้
-- ไม่สร้างภาพการมอบหมายงานให้ทั้ง 7 roles ถ้าไม่มีข้อมูลการเรียกจริง เวอร์ชันนี้แสดงเครื่องมือของแต่ละ session ที่โต๊ะ Codex ยังไม่แสดงความสัมพันธ์ subagent
+- แสดง subagent ที่ Codex เรียกจริงจาก metadata `thread_spawn` พร้อมงาน เครื่องมือ และส่งงานกลับใน session ของผู้สั่งหลัก ชื่อ task `pm`, `architect`, `backend`, `frontend`, `qa`, `debugger`, `reviewer` ตรงกับโต๊ะทีม ชื่ออื่นใช้ Helper โดยไม่เดาบทบาทจากคำสั่ง ไม่แสดง worker ตรวจ permission ภายใน
 - Codex log เก็บในเครื่องเป็นค่าเริ่มต้น หากต้องการยึด hash ตาม `AUDIT_ANCHOR` ให้ตั้ง `CODEX_ANCHOR=on` (โหมด github จะ push hash ไป origin) ไม่รายงาน token ถ้าไม่มีการคำนวณจากข้อมูลจริง
 - รูปแบบ rollout เป็นข้อมูลภายในของ Codex ที่อาจเปลี่ยนได้ รองรับรูปแบบที่ตรวจพบในเครื่องนี้ ไม่ใช่การสมัครรับเหตุการณ์ผ่าน API ทางการ และเหตุการณ์จะปรากฏหลัง Codex เขียนไฟล์แล้ว
 

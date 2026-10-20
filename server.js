@@ -55,7 +55,7 @@ const flow = new Flow({
 
 const codex = (process.env.CODEX_WATCH || (config.provider && config.provider !== "codex" ? "off" : "on")) === "off" ? null : new CodexBridge({
   dir: path.resolve(process.env.CODEX_SESSIONS_DIR || path.join(process.env.CODEX_HOME || path.join(homedir(), ".codex"), "sessions")),
-  workspace: process.env.CODEX_WORKSPACE || config.workspace || WORKSPACE,
+  workspace: process.env.CODEX_WORKSPACE || process.env.WORKSPACE || config.workspace || WORKSPACE,
   stateFile: path.join(LOG_DIR, ".codex-cursors.json"),
   audit, emit: broadcast,
   // Codex capture is local by default. Explicit opt-in uses the existing anchor mode.
